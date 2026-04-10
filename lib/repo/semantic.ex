@@ -63,7 +63,10 @@ defmodule Cqr.Repo.Semantic do
   end
 
   @doc """
-  Get entities related to the given entity, with relationship type and strength.
+  Get entities related to the given entity via OUTBOUND edges
+  (the anchor entity is the edge source). Each result is tagged with
+  `direction: "outbound"`. The relationship type is reported in its
+  original stored direction.
   """
   def related_entities({ns, name}, depth \\ 1, visible_scope_paths \\ nil) do
     depth_pattern = if depth > 1, do: "*1..#{depth}", else: ""
@@ -75,7 +78,7 @@ defmodule Cqr.Repo.Semantic do
              "b.reputation, type(r) AS rel_type, r.strength"
          ) do
       {:ok, rows} ->
-        rows = maybe_filter_entities_by_scope(rows, visible_scope_paths)
+        rows = maybe_filter_entities_by_scope(rows, visible_scope_paths, "b")
 
         related =
           Enum.map(rows, fn row ->
@@ -85,8 +88,50 @@ defmodule Cqr.Repo.Semantic do
               description: row["b.description"],
               relationship: row["rel_type"],
               strength: row["r.strength"],
+              direction: "outbound",
               owner: row["b.owner"],
               reputation: row["b.reputation"]
+            }
+          end)
+
+        {:ok, related}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Get entities related to the given entity via INBOUND edges
+  (the anchor entity is the edge target). Each result is tagged with
+  `direction: "inbound"`. The relationship type is reported in its
+  original stored direction — e.g. for `churn_rate -[:CONTRIBUTES_TO]-> arr`,
+  discovering inbound from `arr` returns `churn_rate` with relationship
+  `"CONTRIBUTES_TO"` and direction `"inbound"`.
+  """
+  def related_entities_inbound({ns, name}, depth \\ 1, visible_scope_paths \\ nil) do
+    depth_pattern = if depth > 1, do: "*1..#{depth}", else: ""
+
+    case GrafeoServer.query(
+           "MATCH (a:Entity)-[r#{depth_pattern}]->" <>
+             "(b:Entity {namespace: '#{ns}', name: '#{name}'}) " <>
+             "RETURN a.namespace, a.name, a.type, a.description, a.owner, " <>
+             "a.reputation, type(r) AS rel_type, r.strength"
+         ) do
+      {:ok, rows} ->
+        rows = maybe_filter_entities_by_scope(rows, visible_scope_paths, "a")
+
+        related =
+          Enum.map(rows, fn row ->
+            %{
+              entity: {row["a.namespace"], row["a.name"]},
+              type: row["a.type"],
+              description: row["a.description"],
+              relationship: row["rel_type"],
+              strength: row["r.strength"],
+              direction: "inbound",
+              owner: row["a.owner"],
+              reputation: row["a.reputation"]
             }
           end)
 
@@ -127,12 +172,15 @@ defmodule Cqr.Repo.Semantic do
     Enum.filter(rows, fn row -> row["s.path"] in visible_keys end)
   end
 
-  defp maybe_filter_entities_by_scope(rows, nil), do: rows
+  defp maybe_filter_entities_by_scope(rows, nil, _prefix), do: rows
 
-  defp maybe_filter_entities_by_scope(rows, visible_scope_paths) do
-    # For related entities, check if each entity is in a visible scope
+  defp maybe_filter_entities_by_scope(rows, visible_scope_paths, prefix) do
+    # For related entities, check if each entity is in a visible scope.
+    # `prefix` selects which row alias holds the related entity's fields:
+    # "b" for outbound queries (anchor is source, related is target),
+    # "a" for inbound queries (anchor is target, related is source).
     Enum.filter(rows, fn row ->
-      {ns, name} = {row["b.namespace"], row["b.name"]}
+      {ns, name} = {row["#{prefix}.namespace"], row["#{prefix}.name"]}
 
       case Cqr.Grafeo.Server.query(
              "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>

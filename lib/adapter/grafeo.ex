@@ -45,10 +45,11 @@ defmodule Cqr.Adapter.Grafeo do
   def discover(%Cqr.Discover{related_to: related_to} = expression, scope_context, _opts) do
     visible = scope_context[:visible_scopes] || []
     depth = expression.depth || 2
+    direction = expression.direction || :both
 
     case related_to do
       {:entity, entity} ->
-        case Semantic.related_entities(entity, depth, visible) do
+        case fetch_related(entity, depth, visible, direction) do
           {:ok, related} ->
             result = normalize_discovery(related, entity, expression)
             {:ok, result}
@@ -61,6 +62,24 @@ defmodule Cqr.Adapter.Grafeo do
       {:search, _term} ->
         # Search-based discovery not yet implemented in V1
         {:ok, %Cqr.Result{data: [], sources: ["grafeo"]}}
+    end
+  end
+
+  # Dispatch to the right semantic query (or both) based on the requested
+  # edge direction. Edges are stored once, directionally; "both" performs
+  # two queries and unions the results, tagged with their direction.
+  defp fetch_related(entity, depth, visible, :outbound) do
+    Semantic.related_entities(entity, depth, visible)
+  end
+
+  defp fetch_related(entity, depth, visible, :inbound) do
+    Semantic.related_entities_inbound(entity, depth, visible)
+  end
+
+  defp fetch_related(entity, depth, visible, :both) do
+    with {:ok, out} <- Semantic.related_entities(entity, depth, visible),
+         {:ok, inb} <- Semantic.related_entities_inbound(entity, depth, visible) do
+      {:ok, out ++ inb}
     end
   end
 
