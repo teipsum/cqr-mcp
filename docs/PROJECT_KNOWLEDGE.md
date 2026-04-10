@@ -233,7 +233,8 @@ Scope is not a filter applied after retrieval. It is a fundamental part of query
 
 - Every expression operates within a scope hierarchy
 - The scope resolution engine determines entity visibility before any data retrieval
-- Scope traversal follows: agent's active scope → parent scopes → fallback chain
+- Visibility is bidirectional along the hierarchy: an agent sees its own scope, all ancestors (for fallback resolution), and all descendants (parent scopes own their children — essential for company-wide admin agents). Siblings remain isolated.
+- Scope traversal follows: agent's active scope → ancestors (fallback chain) and descendants (owned sub-scopes)
 - If an entity is not in the agent's accessible scope, it does not exist from that agent's perspective (genuine invisibility, not access denied)
 - Scope resolution is cached in ETS for sub-millisecond lookup
 
