@@ -7,7 +7,8 @@ defmodule CqrMcp.Application do
   def start(_type, _args) do
     children = [
       {Cqr.Grafeo.Server, storage: :memory},
-      Cqr.Repo.ScopeTree
+      Cqr.Repo.ScopeTree,
+      CqrMcp.Server
     ]
 
     opts = [strategy: :one_for_one, name: CqrMcp.Supervisor]

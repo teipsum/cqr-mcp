@@ -107,7 +107,7 @@ defmodule CqrMcp.Resources do
           "Scope determines visibility BEFORE data retrieval. Out-of-scope entities are genuinely invisible, not access-denied.",
         "quality_metadata" =>
           "Every response includes mandatory quality metadata: freshness, confidence, reputation, owner, lineage.",
-        "certification_lifecycle" => "proposed → under_review → certified → superseded",
+        "certification_lifecycle" => "proposed -> under_review -> certified -> superseded",
         "conflict_preservation" =>
           "When multiple sources disagree, all values are returned with source attribution."
       },
@@ -130,7 +130,7 @@ defmodule CqrMcp.Resources do
         case Cqr.Repo.Semantic.entities_in_scope(scope) do
           {:ok, ents} ->
             Enum.map(ents, fn e ->
-              "  #{e.namespace}:#{e.name} (#{e.type}) — #{e.description} [#{Cqr.Types.format_scope(scope)}]"
+              "  #{e.namespace}:#{e.name} (#{e.type}) -- #{e.description} [#{Cqr.Types.format_scope(scope)}]"
             end)
 
           _ ->
@@ -153,17 +153,17 @@ defmodule CqrMcp.Resources do
 
     ## Grammar
 
-    ### RESOLVE — Retrieve a canonical entity
+    ### RESOLVE -- Retrieve a canonical entity
     ```
     RESOLVE entity:namespace:name [FROM scope:...] [WITH freshness < duration] [WITH reputation > score] [INCLUDE annotations] [FALLBACK scope:... -> scope:...]
     ```
 
-    ### DISCOVER — Explore related concepts
+    ### DISCOVER -- Explore related concepts
     ```
     DISCOVER concepts RELATED TO entity:namespace:name [WITHIN scope:...] [DEPTH n] [ANNOTATE annotations] [LIMIT n]
     ```
 
-    ### CERTIFY — Govern definitions
+    ### CERTIFY -- Govern definitions
     ```
     CERTIFY entity:namespace:name STATUS proposed|under_review|certified|superseded [AUTHORITY id] [EVIDENCE "..."]
     ```

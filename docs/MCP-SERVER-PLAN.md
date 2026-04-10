@@ -287,7 +287,7 @@ Do NOT spend more than 1.5 days on NIF issues before switching to a fallback. Th
 
 1. **Scope hierarchy engine** — `Cqr.Scope`:
    - Load scope tree from embedded Grafeo on application start
-   - `visible_scopes/1` — given an agent's scope, return all accessible scopes (self + ancestors)
+   - `visible_scopes/1` — given an agent's scope, return all accessible scopes (self + ancestors + descendants; siblings remain isolated)
    - `authoritative_scope/2` — given an entity and a requesting scope, return the nearest scope that contains the entity
    - `fallback_chain/2` — given an explicit fallback list, validate each scope exists and return the resolution order
    - Cache scope tree in ETS for sub-millisecond lookups (already validated as working in POC)

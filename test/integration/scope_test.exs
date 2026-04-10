@@ -25,15 +25,22 @@ defmodule Cqr.Integration.ScopeTest do
   end
 
   describe "visible_scopes/1" do
-    test "root scope sees only itself" do
+    test "root scope sees itself and all descendants" do
       visible = Scope.visible_scopes(["company"])
-      assert visible == [["company"]]
+      assert ["company"] in visible
+      assert ["company", "finance"] in visible
+      assert ["company", "product"] in visible
+      assert ["company", "engineering"] in visible
+      assert ["company", "hr"] in visible
+      assert ["company", "customer_success"] in visible
+      assert length(visible) == 6
     end
 
     test "child scope sees self and parent" do
       visible = Scope.visible_scopes(["company", "finance"])
       assert ["company", "finance"] in visible
       assert ["company"] in visible
+      # Leaf scope: no descendants, so just self + parent
       assert length(visible) == 2
     end
 
@@ -55,8 +62,10 @@ defmodule Cqr.Integration.ScopeTest do
       refute Scope.accessible?(["company", "finance"], ["company", "engineering"])
     end
 
-    test "child scope is NOT accessible from parent" do
-      refute Scope.accessible?(["company"], ["company", "finance"])
+    test "child scope IS accessible from parent" do
+      # Parents own their descendants — bidirectional visibility along the
+      # hierarchy. Siblings remain isolated.
+      assert Scope.accessible?(["company"], ["company", "finance"])
     end
   end
 
@@ -66,16 +75,11 @@ defmodule Cqr.Integration.ScopeTest do
                Scope.authoritative_scope({"finance", "arr"}, ["company", "finance"])
     end
 
-    test "entity visible via parent scope" do
-      # From company root, finance entities are NOT visible (scope-first: genuine invisibility)
-      # The company scope can see itself but finance entities are IN scope:finance
-      # Since company is parent of finance, company does NOT see finance's entities
-      # unless the query specifically traverses
-      result = Scope.authoritative_scope({"finance", "arr"}, ["company"])
-
-      # From root company scope, finance scope is not in visible_scopes (only ["company"])
-      # So finance entities are invisible
-      assert result == {:error, :not_visible}
+    test "entity visible to parent scope" do
+      # The root company agent owns all sub-scopes, so finance entities are
+      # visible. authoritative_scope returns the entity's actual scope.
+      assert {:ok, ["company", "finance"]} =
+               Scope.authoritative_scope({"finance", "arr"}, ["company"])
     end
 
     test "entity in sibling scope is not visible" do
