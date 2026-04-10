@@ -1,0 +1,23 @@
+defmodule Cqr.Adapter.Behaviour do
+  @moduledoc """
+  Adapter behaviour contract for CQR storage backends.
+
+  Every storage backend (Grafeo, PostgreSQL, Neo4j, Elasticsearch, etc.)
+  implements this behaviour. The engine routes expressions to adapters
+  based on their declared capabilities.
+
+  See PROJECT_KNOWLEDGE.md Section 3.4.
+  """
+
+  @callback resolve(expression :: term(), scope_context :: term(), opts :: keyword()) ::
+              {:ok, term()} | {:error, term()}
+
+  @callback discover(expression :: term(), scope_context :: term(), opts :: keyword()) ::
+              {:ok, term()} | {:error, term()}
+
+  @callback normalize(raw_results :: term(), metadata :: term()) :: term()
+
+  @callback health_check() :: :ok | {:error, term()}
+
+  @callback capabilities() :: [atom()]
+end

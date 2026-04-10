@@ -1,0 +1,35 @@
+Business Source License 1.1
+
+Parameters
+
+Licensor:             Michael Lewis Cram
+Licensed Work:        CQR-MCP
+                      The Licensed Work is (c) Michael Lewis Cram
+Additional Use Grant: You may make production use of the Licensed Work,
+                      provided such use does not include offering the
+                      Licensed Work to third parties on a hosted or
+                      embedded basis which is competitive with TEIPSUM's
+                      products.
+Change Date:          Four years from the date the Licensed Work is
+                      published.  (April 8 2030)
+Change License:       MIT License
+
+For information about alternative licensing arrangements for the
+Licensed Work, please contact: licensing@teipsum.com
+
+Notice
+
+The Business Source License (this document, or the "License") is not an
+Open Source license. However, the Licensed Work will eventually be made
+available under an Open Source License, as stated in this License.
+
+The full text of the Business Source License 1.1 is available at:
+https://mariadb.com/bsl11/
+
+The terms of the Business Source License 1.1 are hereby incorporated
+by reference. By using the Licensed Work, you agree to those terms.
+
+---
+
+License text copyright (c) 2024 MariaDB plc, All Rights Reserved.
+"Business Source License" is a trademark of MariaDB plc.

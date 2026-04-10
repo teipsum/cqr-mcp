@@ -1,0 +1,13 @@
+[package]
+name = "cqr_grafeo"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "cqr_grafeo"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.37"
+grafeo = { version = "0.5.34", default-features = true }
+grafeo-common = "0.5.34"
