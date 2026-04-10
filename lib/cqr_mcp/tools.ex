@@ -77,7 +77,9 @@ defmodule CqrMcp.Tools do
         "properties" => %{
           "topic" => %{
             "type" => "string",
-            "description" => "Entity reference (entity:namespace:name) or search term in quotes"
+            "description" =>
+              "Entity reference (entity:namespace:name) or a free-text search term. " <>
+                "Pass the search term as a plain string without quotes; the server will quote it."
           },
           "scope" => %{
             "type" => "string",
@@ -100,7 +102,7 @@ defmodule CqrMcp.Tools do
       "name" => "cqr_certify",
       "description" =>
         "Propose, review, or approve a governance definition in the organizational context. " <>
-          "Manages the certification lifecycle: proposed → under_review → certified.",
+          "Manages the certification lifecycle: proposed -> under_review -> certified.",
       "inputSchema" => %{
         "type" => "object",
         "properties" => %{
@@ -154,9 +156,14 @@ defmodule CqrMcp.Tools do
     topic = args["topic"]
 
     topic_part =
-      if String.starts_with?(topic, "entity:"),
-        do: topic,
-        else: ~s("#{topic}")
+      if String.starts_with?(topic, "entity:") do
+        topic
+      else
+        # Strip any quotes the client may have added around the search term so
+        # we never end up with doubled quotes like ""finance"".
+        unquoted = topic |> String.trim() |> String.trim(~s("))
+        ~s("#{unquoted}")
+      end
 
     parts = ["DISCOVER concepts RELATED TO #{topic_part}"]
 

@@ -6,10 +6,14 @@ defmodule Cqr.Scope do
   Uses ETS cache (via `Cqr.Repo.ScopeTree`) for sub-millisecond lookups.
 
   Key functions:
-  - `visible_scopes/1` — all scopes an agent can see (self + ancestors)
+  - `visible_scopes/1` — all scopes an agent can see (self + ancestors + descendants)
   - `authoritative_scope/2` — nearest scope containing an entity
   - `fallback_chain/2` — validated fallback resolution order
   - `accessible?/2` — can agent_scope see target_scope?
+
+  Visibility is bidirectional along the hierarchy: a child scope can fall
+  back to its ancestors, and a parent scope owns its descendants. Siblings
+  remain isolated.
 
   See PROJECT_KNOWLEDGE.md Section 7.
   """
@@ -18,7 +22,7 @@ defmodule Cqr.Scope do
 
   @doc """
   Return all scopes visible from the given agent scope.
-  Includes the scope itself and all ancestors.
+  Includes the scope itself, all ancestors, and all descendants.
   """
   def visible_scopes(agent_scope) when is_list(agent_scope) do
     ScopeTree.visible_scopes(agent_scope)

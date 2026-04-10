@@ -39,7 +39,18 @@ defmodule Cqr.Repo.ScopeTree do
   end
 
   @doc """
-  Return all scopes visible from the given scope (self + ancestors).
+  Return all scopes visible from the given scope.
+
+  Visibility is bidirectional along the hierarchy:
+
+    * **self**         — the agent's own scope
+    * **ancestors**    — for fallback resolution (a `company:finance` agent can
+                         fall back to `company`-wide definitions)
+    * **descendants**  — a parent scope owns its children, so e.g. a `company`
+                         agent can see entities in `company:finance`,
+                         `company:product`, etc.
+
+  Siblings are not visible: `company:finance` cannot see `company:engineering`.
   """
   def visible_scopes(path) when is_list(path) do
     key = Enum.join(path, ":")
@@ -47,7 +58,8 @@ defmodule Cqr.Repo.ScopeTree do
     case :ets.lookup(@table, {:scope, key}) do
       [{_, _scope_data}] ->
         ancestors = build_ancestors(path)
-        [path | ancestors]
+        descendants = build_descendants(path)
+        [path | ancestors] ++ descendants
 
       [] ->
         []
@@ -138,5 +150,10 @@ defmodule Cqr.Repo.ScopeTree do
   defp build_ancestors(path) do
     parent = Enum.slice(path, 0..-2//1)
     [parent | build_ancestors(parent)]
+  end
+
+  defp build_descendants(path) do
+    direct = children(path)
+    direct ++ Enum.flat_map(direct, &build_descendants/1)
   end
 end
