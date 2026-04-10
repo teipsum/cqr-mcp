@@ -90,6 +90,18 @@ defmodule CqrMcp.Tools do
             "type" => "integer",
             "description" => "Traversal depth (default: 2)",
             "default" => 2
+          },
+          "direction" => %{
+            "type" => "string",
+            "enum" => ["outbound", "inbound", "both"],
+            "description" =>
+              "Which edge direction(s) to traverse from the topic entity. " <>
+                "'outbound' returns entities the topic points TO; " <>
+                "'inbound' returns entities that point AT the topic; " <>
+                "'both' (default) returns the union with each result tagged " <>
+                "by direction. Edges are stored once, directionally; the " <>
+                "relationship type always reads in its original direction.",
+            "default" => "both"
           }
         },
         "required" => ["topic"]
@@ -183,6 +195,11 @@ defmodule CqrMcp.Tools do
     parts =
       if args["depth"],
         do: parts ++ ["DEPTH #{args["depth"]}"],
+        else: parts
+
+    parts =
+      if args["direction"] in ["outbound", "inbound", "both"],
+        do: parts ++ ["DIRECTION #{args["direction"]}"],
         else: parts
 
     Enum.join(parts, " ")

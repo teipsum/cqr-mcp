@@ -67,12 +67,27 @@ defmodule Cqr.Parser.Discover do
     |> unwrap_and_tag(:limit)
   end
 
+  def direction_clause do
+    ignore(string("DIRECTION"))
+    |> ignore(Terminals.sp())
+    |> concat(
+      choice([
+        string("outbound") |> replace(:outbound),
+        string("inbound") |> replace(:inbound),
+        string("both") |> replace(:both)
+      ])
+    )
+    |> unwrap_and_tag(:direction)
+    |> label("DIRECTION clause (outbound, inbound, both)")
+  end
+
   def optional_clause do
     choice([
       within_clause(),
       depth_clause(),
       annotate_clause(),
-      limit_clause()
+      limit_clause(),
+      direction_clause()
     ])
   end
 
@@ -100,6 +115,7 @@ defmodule Cqr.Parser.Discover do
       {:depth, d}, acc -> %{acc | depth: d}
       {:annotate, annots}, acc -> %{acc | annotate: annots}
       {:limit, l}, acc -> %{acc | limit: l}
+      {:direction, dir}, acc -> %{acc | direction: dir}
     end)
   end
 end
