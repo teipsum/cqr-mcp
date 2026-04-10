@@ -28,9 +28,17 @@ defmodule Cqr.Parser.Certify do
   end
 
   def authority_clause do
+    # Authority is an opaque identifier string. Accept either a quoted form
+    # (which may contain colons, e.g. "twin:michael") or a bare identifier
+    # for back-compat with simple authorities like `cfo`.
     ignore(string("AUTHORITY"))
     |> ignore(Terminals.sp())
-    |> concat(Terminals.identifier())
+    |> concat(
+      choice([
+        Terminals.string_literal(),
+        Terminals.identifier()
+      ])
+    )
     |> unwrap_and_tag(:authority)
   end
 

@@ -13,6 +13,13 @@ defmodule CqrMcp.Resources do
   def list do
     [
       %{
+        "uri" => "cqr://session",
+        "name" => "Agent Session",
+        "description" =>
+          "Current agent identity, scope, permissions, and connection metadata",
+        "mimeType" => "application/json"
+      },
+      %{
         "uri" => "cqr://scopes",
         "name" => "Organizational Scopes",
         "description" => "Scope hierarchy with visibility rules",
@@ -43,11 +50,58 @@ defmodule CqrMcp.Resources do
   end
 
   @doc "Read a resource by URI."
+  def read("cqr://session"), do: {:ok, read_session()}
   def read("cqr://scopes"), do: {:ok, read_scopes()}
   def read("cqr://entities"), do: {:ok, read_entities()}
   def read("cqr://policies"), do: {:ok, read_policies()}
   def read("cqr://system_prompt"), do: {:ok, read_system_prompt()}
   def read(uri), do: {:error, "Unknown resource: #{uri}"}
+
+  # --- Session ---
+
+  defp read_session do
+    agent_id = System.get_env("CQR_AGENT_ID", "anonymous")
+    agent_scope_str = System.get_env("CQR_AGENT_SCOPE", "scope:company")
+    agent_scope_segments = parse_scope(agent_scope_str)
+
+    visible =
+      agent_scope_segments
+      |> Cqr.Repo.ScopeTree.visible_scopes()
+      |> Enum.map(&Cqr.Types.format_scope/1)
+
+    boot_unix = :persistent_term.get({CqrMcp.Application, :boot_unix})
+    boot_iso = :persistent_term.get({CqrMcp.Application, :boot_iso})
+    session_id = :persistent_term.get({CqrMcp.Application, :session_id})
+
+    %{
+      "agent_id" => agent_id,
+      "agent_scope" => Cqr.Types.format_scope(agent_scope_segments),
+      "visible_scopes" => visible,
+      "permissions" => ["resolve", "discover", "certify"],
+      "connected_adapters" => ["grafeo"],
+      "server_version" => server_version(),
+      "protocol" => "CQR/1.0",
+      "uptime_seconds" => System.system_time(:second) - boot_unix,
+      "connection" => %{
+        "transport" => "stdio",
+        "connected_at" => boot_iso,
+        "session_id" => session_id
+      }
+    }
+  end
+
+  defp parse_scope(str) do
+    str
+    |> String.trim_leading("scope:")
+    |> String.split(":", trim: true)
+  end
+
+  defp server_version do
+    case Application.spec(:cqr_mcp, :vsn) do
+      nil -> "unknown"
+      vsn -> to_string(vsn)
+    end
+  end
 
   # --- Scopes ---
 

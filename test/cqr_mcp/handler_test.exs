@@ -247,7 +247,7 @@ defmodule CqrMcp.HandlerTest do
   end
 
   describe "resources/list" do
-    test "returns four resources" do
+    test "returns five resources" do
       response =
         Handler.handle_request(%{
           "jsonrpc" => "2.0",
@@ -256,9 +256,10 @@ defmodule CqrMcp.HandlerTest do
         })
 
       resources = response["result"]["resources"]
-      assert length(resources) == 4
+      assert length(resources) == 5
 
       uris = Enum.map(resources, & &1["uri"])
+      assert "cqr://session" in uris
       assert "cqr://scopes" in uris
       assert "cqr://entities" in uris
       assert "cqr://policies" in uris
@@ -400,7 +401,7 @@ defmodule CqrMcp.HandlerTest do
           "method" => "resources/list"
         })
 
-      assert length(r5["result"]["resources"]) == 4
+      assert length(r5["result"]["resources"]) == 5
 
       r6 =
         Handler.handle_request(%{
