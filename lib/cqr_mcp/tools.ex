@@ -193,15 +193,29 @@ defmodule CqrMcp.Tools do
 
     parts =
       if args["authority"],
-        do: parts ++ ["AUTHORITY #{args["authority"]}"],
+        do: parts ++ ["AUTHORITY #{quote_opaque(args["authority"])}"],
         else: parts
 
     parts =
       if args["evidence"],
-        do: parts ++ ["EVIDENCE \"#{args["evidence"]}\""],
+        do: parts ++ ["EVIDENCE #{quote_opaque(args["evidence"])}"],
         else: parts
 
     Enum.join(parts, " ")
+  end
+
+  # Quote a free-form value as a CQR string literal. Strips any surrounding
+  # quotes the client may have added (idempotent under double-quoting), and
+  # replaces internal `"` with `'` since the grammar's string_literal does
+  # not support escape sequences.
+  defp quote_opaque(value) when is_binary(value) do
+    cleaned =
+      value
+      |> String.trim()
+      |> String.trim(~s("))
+      |> String.replace(~s("), "'")
+
+    ~s("#{cleaned}")
   end
 
   # --- Result formatting ---

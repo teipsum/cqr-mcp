@@ -144,6 +144,6 @@ defmodule CqrMcp.Handler do
           |> String.split(":")
       end
 
-    %{scope: scope, agent_id: System.get_env("CQR_AGENT_ID", "mcp_agent")}
+    %{scope: scope, agent_id: System.get_env("CQR_AGENT_ID", "anonymous")}
   end
 end
