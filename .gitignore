@@ -1,0 +1,29 @@
+# Elixir
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+erl_crash.dump
+*.ez
+*.beam
+cqr_mcp-*.tar
+
+# Rust/NIF
+native/cqr_grafeo/target/
+*.so
+*.dylib
+*.dll
+
+# IDE
+.elixir_ls/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
