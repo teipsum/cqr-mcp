@@ -8,7 +8,7 @@ defmodule CqrMcp.Tools do
 
   @doc "Return the list of available MCP tools."
   def list do
-    [resolve_tool(), discover_tool(), certify_tool()]
+    [resolve_tool(), discover_tool(), certify_tool(), assert_tool()]
   end
 
   @doc "Execute a tool call by name with the given arguments and agent context."
@@ -25,6 +25,17 @@ defmodule CqrMcp.Tools do
   def call("cqr_certify", args, context) do
     expression = build_certify_expression(args)
     execute_and_format(expression, context)
+  end
+
+  def call("cqr_assert", args, context) do
+    case build_assert_expression(args) do
+      {:ok, expression, relationships} ->
+        enriched_context = Map.put(context, :relationships, relationships)
+        execute_and_format(expression, enriched_context)
+
+      {:error, error} ->
+        {:error, error}
+    end
   end
 
   def call(name, _args, _context) do
@@ -105,6 +116,68 @@ defmodule CqrMcp.Tools do
           }
         },
         "required" => ["topic"]
+      }
+    }
+  end
+
+  defp assert_tool do
+    %{
+      "name" => "cqr_assert",
+      "description" =>
+        "Assert governed but uncertified context into the organizational knowledge graph. " <>
+          "The asserted entity is immediately visible to cqr_resolve and cqr_discover, but " <>
+          "carries lower trust than certified entities (reputation 0.5, certified false, " <>
+          "with a mandatory INTENT and DERIVED_FROM paper trail). Use this to record " <>
+          "agent-generated findings, derived metrics, observations, and working hypotheses.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "entity" => %{
+            "type" => "string",
+            "description" => "Semantic address for the new context: entity:namespace:name"
+          },
+          "type" => %{
+            "type" => "string",
+            "description" =>
+              "Entity type: metric, definition, policy, derived_metric, observation, or recommendation"
+          },
+          "description" => %{
+            "type" => "string",
+            "description" => "Human-readable description of the entity"
+          },
+          "intent" => %{
+            "type" => "string",
+            "description" =>
+              "Why the agent is asserting this -- the use case, task context, or question being " <>
+                "answered. Mandatory for governance auditability."
+          },
+          "derived_from" => %{
+            "type" => "string",
+            "description" =>
+              "Comma-separated source entity references (entity:ns:name,entity:ns:name). " <>
+                "The cognitive lineage this assertion was derived from. Mandatory."
+          },
+          "scope" => %{
+            "type" => "string",
+            "description" =>
+              "Target scope (scope:seg1:seg2). Defaults to the agent's active scope if omitted."
+          },
+          "confidence" => %{
+            "type" => "number",
+            "description" =>
+              "Agent's self-assessed confidence in this assertion (0.0 to 1.0). Default 0.5."
+          },
+          "relationships" => %{
+            "type" => "string",
+            "description" =>
+              "Optional typed relationships to existing entities, as a comma-separated list. " <>
+                "Each relationship uses the shorthand REL:entity:ns:name:strength, e.g. " <>
+                "'CORRELATES_WITH:entity:product:nps:0.7,DEPENDS_ON:entity:finance:arr:0.5'. " <>
+                "Valid relationship types: CORRELATES_WITH, CONTRIBUTES_TO, DEPENDS_ON, " <>
+                "CAUSES, PART_OF."
+          }
+        },
+        "required" => ["entity", "type", "description", "intent", "derived_from"]
       }
     }
   end
@@ -203,6 +276,158 @@ defmodule CqrMcp.Tools do
         else: parts
 
     Enum.join(parts, " ")
+  end
+
+  defp build_assert_expression(args) do
+    with {:ok, entity} <- require_string(args, "entity"),
+         {:ok, type} <- require_string(args, "type"),
+         {:ok, description} <- require_string(args, "description"),
+         {:ok, intent} <- require_string(args, "intent"),
+         {:ok, derived_from_raw} <- require_string(args, "derived_from"),
+         {:ok, derived_from_refs} <- parse_derived_from(derived_from_raw),
+         {:ok, relationships} <- parse_relationships(args["relationships"]) do
+      parts = [
+        "ASSERT #{entity}",
+        "TYPE #{type}",
+        "DESCRIPTION \"#{sanitize_quoted(description)}\"",
+        "INTENT \"#{sanitize_quoted(intent)}\"",
+        "DERIVED_FROM #{Enum.join(derived_from_refs, ", ")}"
+      ]
+
+      parts =
+        if args["scope"],
+          do: parts ++ ["IN #{args["scope"]}"],
+          else: parts
+
+      parts =
+        case args["confidence"] do
+          nil ->
+            parts
+
+          score when is_number(score) ->
+            parts ++ ["CONFIDENCE #{:erlang.float_to_binary(score * 1.0, decimals: 2)}"]
+
+          _ ->
+            parts
+        end
+
+      expression = Enum.join(parts, " ")
+      {:ok, expression, relationships}
+    end
+  end
+
+  defp require_string(args, key) do
+    case args[key] do
+      value when is_binary(value) and value != "" ->
+        {:ok, value}
+
+      _ ->
+        {:error,
+         %{
+           "code" => -32602,
+           "message" => "Missing or invalid required field: #{key}"
+         }}
+    end
+  end
+
+  # Strip any surrounding double-quotes the client may have added (same
+  # idempotency pattern used by build_discover_expression) and replace
+  # internal double-quotes with single quotes, since the CQR grammar's
+  # string_literal has no escape support.
+  defp sanitize_quoted(value) do
+    value
+    |> String.trim()
+    |> String.trim(~s("))
+    |> String.replace(~s("), "'")
+  end
+
+  defp parse_derived_from(raw) do
+    refs =
+      raw
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    cond do
+      refs == [] ->
+        {:error, %{"code" => -32602, "message" => "derived_from must list at least one entity"}}
+
+      Enum.all?(refs, &String.starts_with?(&1, "entity:")) ->
+        {:ok, refs}
+
+      true ->
+        bad = Enum.reject(refs, &String.starts_with?(&1, "entity:"))
+
+        {:error,
+         %{
+           "code" => -32602,
+           "message" =>
+             "derived_from entries must be in entity:namespace:name form. Invalid: " <>
+               Enum.join(bad, ", ")
+         }}
+    end
+  end
+
+  # Parse the `relationships` shorthand string into a list of
+  # `%{type: rel_type, target: {ns, name}, strength: float}` maps.
+  # Format: "REL:entity:ns:name:strength,REL:entity:ns:name:strength"
+  defp parse_relationships(nil), do: {:ok, []}
+  defp parse_relationships(""), do: {:ok, []}
+
+  @valid_relationship_types ~w(CORRELATES_WITH CONTRIBUTES_TO DEPENDS_ON CAUSES PART_OF)
+
+  defp parse_relationships(raw) when is_binary(raw) do
+    result =
+      raw
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
+        case parse_one_relationship(entry) do
+          {:ok, rel} -> {:cont, {:ok, [rel | acc]}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+
+    case result do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp parse_one_relationship(entry) do
+    case String.split(entry, ":") do
+      [rel, "entity", ns, name, strength_str] ->
+        with true <- rel in @valid_relationship_types,
+             {strength, ""} <- Float.parse(strength_str),
+             true <- strength >= 0.0 and strength <= 1.0 do
+          {:ok, %{type: rel, target: {ns, name}, strength: strength}}
+        else
+          false ->
+            {:error,
+             %{
+               "code" => -32602,
+               "message" =>
+                 "Invalid relationship '#{entry}': type must be one of " <>
+                   Enum.join(@valid_relationship_types, ", ") <>
+                   " and strength must be between 0.0 and 1.0"
+             }}
+
+          _ ->
+            {:error,
+             %{
+               "code" => -32602,
+               "message" => "Invalid relationship '#{entry}': strength must be a decimal"
+             }}
+        end
+
+      _ ->
+        {:error,
+         %{
+           "code" => -32602,
+           "message" => "Invalid relationship '#{entry}': expected REL:entity:ns:name:strength"
+         }}
+    end
   end
 
   defp build_certify_expression(args) do

@@ -690,10 +690,16 @@ defmodule Cqr.Adapter.Grafeo do
   # --- Private ---
 
   defp normalize_entity(entity_data, _expression) do
+    # certified_by / certified_at come from the Entity node directly so
+    # CERTIFY's authority and timestamp round-trip through RESOLVE. Before
+    # the certify-audit-trail fixes, certified_by was synthesized from the
+    # owner field, which meant RESOLVE returned the original asserter even
+    # after certification by an external authority.
     quality = %Cqr.Quality{
       reputation: entity_data[:reputation],
       owner: entity_data[:owner],
-      certified_by: if(entity_data[:certified], do: entity_data[:owner], else: nil)
+      certified_by: entity_data[:certified_by],
+      certified_at: parse_timestamp(entity_data[:certified_at])
     }
 
     %Cqr.Result{
@@ -702,6 +708,17 @@ defmodule Cqr.Adapter.Grafeo do
       quality: quality
     }
   end
+
+  defp parse_timestamp(nil), do: nil
+
+  defp parse_timestamp(iso) when is_binary(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, dt, _offset} -> dt
+      _ -> nil
+    end
+  end
+
+  defp parse_timestamp(_), do: nil
 
   defp normalize_discovery(related, anchor_entity, _expression) do
     quality =

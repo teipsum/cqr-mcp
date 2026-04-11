@@ -27,7 +27,8 @@ defmodule Cqr.Repo.Semantic do
            "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>
              "-[:IN_SCOPE]->(s:Scope) " <>
              "RETURN e.namespace, e.name, e.type, e.description, e.owner, " <>
-             "e.reputation, e.freshness_hours_ago, e.certified, s.path"
+             "e.reputation, e.freshness_hours_ago, e.certified, " <>
+             "e.certified_by, e.certified_at, e.certification_status, s.path"
          ) do
       {:ok, []} ->
         {:error, :not_found}
@@ -209,9 +210,16 @@ defmodule Cqr.Repo.Semantic do
       reputation: first["e.reputation"],
       freshness_hours_ago: first["e.freshness_hours_ago"],
       certified: first["e.certified"],
+      certified_by: nilify_empty(first["e.certified_by"]),
+      certified_at: nilify_empty(first["e.certified_at"]),
+      certification_status: nilify_empty(first["e.certification_status"]),
       scopes: scopes
     }
   end
+
+  defp nilify_empty(nil), do: nil
+  defp nilify_empty(""), do: nil
+  defp nilify_empty(value), do: value
 
   defp row_to_entity_summary(row) do
     %{
