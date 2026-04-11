@@ -1,4 +1,14 @@
-**CQR**
+> **⚠ HISTORICAL DOCUMENT — SUPERSEDED**
+>
+> This is the v0.1 March 2026 draft, written before the protocol was renamed from **SEQUR (Semantic Query Resolution)** to **CQR (Cognitive Query Resolution)** and before the addition of the ASSERT, HYPOTHESIZE, COMPARE, and ANCHOR primitives. The protocol now defines **11 cognitive operation primitives** in 5 categories, not the 7 documented here, and the scope visibility model is bidirectional rather than ancestors-only.
+>
+> The **canonical CQR Protocol Specification** is `README.md` at the repository root (v1.0, April 2026).
+>
+> This document is preserved unchanged below for patent-evidence continuity. The USPTO provisional patent application was filed under the SEQUR name; all claims and semantics in the patent apply to CQR. The terminology in this document — "Semantic Query Resolution," 7 primitives, ancestors-only scope traversal — should be read as the historical state at the priority date, not as the current protocol.
+
+---
+
+**CQR** (originally filed as **SEQUR**)
 
 Semantic Query Resolution
 

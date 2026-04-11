@@ -6,13 +6,27 @@
 
 ## 1. What Is CQR
 
-CQR (Semantic Query Resolution) is a declarative query language designed for machine cognition as the primary consumer. It enables AI agents to interact with organizational context across heterogeneous storage backends through cognitive operation primitives rather than data manipulation primitives.
+CQR (**Cognitive Query Resolution**) is a declarative query language designed for machine cognition as the primary consumer. It enables AI agents to interact with organizational context across heterogeneous storage backends through cognitive operation primitives rather than data manipulation primitives.
 
-**The core insight:** Existing query languages (SQL, GraphQL, SPARQL, Cypher) are designed for human developers. When AI agents use them, they do so through pre-coded tool calls. CQR flips this — the agent generates the query expression from natural language intent, and the language's primitives correspond to reasoning patterns (resolve a concept, orient in a neighborhood, trace causality, assess quality, participate in governance) rather than data operations (select, join, filter).
+**The core insight:** Existing query languages (SQL, GraphQL, SPARQL, Cypher) are designed for human developers. When AI agents use them, they do so through pre-coded tool calls. CQR flips this — the agent generates the query expression from natural language intent, and the language's primitives correspond to reasoning patterns (resolve a concept, orient in a neighborhood, assert a finding, trace causality, hypothesize impact, ground reasoning, govern definitions) rather than data operations (select, join, filter).
+
+**Naming history.** CQR was previously named **SEQUR** (Semantic Query Resolution). The USPTO provisional patent application was filed under the SEQUR name; all protocol semantics and claims in the patent apply to CQR. The rename reflects the protocol's evolution from seven primitives to eleven and its broader scope as a cognitive operations protocol rather than a purely semantic query language. "C-Q-R" is pronounced "seeker."
+
+**Eleven primitives in five categories:**
+
+| Category | Primitives |
+|---|---|
+| Context Resolution | RESOLVE, DISCOVER |
+| Context Creation | ASSERT |
+| Reasoning | TRACE, HYPOTHESIZE, COMPARE, ANCHOR |
+| Governance | SIGNAL, CERTIFY |
+| Maintenance & Perception | REFRESH, AWARENESS |
+
+The canonical specification with full grammar, semantics, and examples for all eleven primitives lives in `README.md` at the repository root. This document focuses on the V1 MCP implementation subset.
 
 **Protocol positioning:** MCP = agent-to-tool, A2A = agent-to-agent, CQR = agent-to-governed-context. CQR is the governance layer above MCP and A2A in the agent protocol stack.
 
-**Patent:** A provisional patent application covering 61 claims across 4 independent claims has been prepared. Claims cover the query language, agent generation contract, adapter architecture, multi-agent runtime, human-agent coupling, personal cognitive metadata, resource governance, activity visibility, and context contamination prevention. Priority date must be locked before July 2026.
+**Patent:** A provisional patent application covering 61 claims across 4 independent claims has been prepared (filed under the SEQUR name). Claims cover the query language, agent generation contract, adapter architecture, multi-agent runtime, human-agent coupling, personal cognitive metadata, resource governance, activity visibility, and context contamination prevention. The ASSERT primitive is documented as a continuation in `specs/Assert primitive specification.md` with a GPG-signed timestamp. Priority date must be locked before July 2026.
 
 ---
 
@@ -116,7 +130,9 @@ Adapters self-declare capabilities (which primitives they support). The engine r
 
 ---
 
-## 4. CQR Primitives (V1 Scope)
+## 4. CQR Primitives (V1 MCP Scope)
+
+The full protocol defines 11 primitives (see `README.md`). The V1 MCP server in this repo implements three: RESOLVE, DISCOVER, and CERTIFY. ASSERT is specified and is the next primitive to land.
 
 ### RESOLVE — Canonical Retrieval
 Retrieve a canonical entity by semantic address from the nearest matching scope, with quality metadata.
@@ -140,20 +156,25 @@ DISCOVER concepts
   RELATED TO entity:product:churn_rate
   WITHIN scope:product, scope:customer_success
   DEPTH 3
+  DIRECTION both
   ANNOTATE freshness, reputation, owner
 ```
+
+`DIRECTION` controls which side of the edge graph is traversed. Edges are stored once, directionally — there are no reverse-edge duplicates. `outbound` returns entities the anchor points to; `inbound` returns entities that point at the anchor; `both` (default) returns the union with each result tagged by direction. The relationship type always reads in its original stored direction (e.g., `CONTRIBUTES_TO` always means source contributes to target). DISCOVER is the general exploration primitive — directed reasoning is handled by TRACE (inbound/causal) and HYPOTHESIZE (outbound/impact), which share the same traversal engine.
 
 ### CERTIFY — Governance Workflow
 Manages definition lifecycle through proposal, review, and certification phases.
 
 ```
 CERTIFY entity:finance:arr
-  STATUS proposed
-  AUTHORITY cfo
+  STATUS certified
+  AUTHORITY "agent:twin:michael"
   EVIDENCE "Validated against Q4 actuals"
 ```
 
-Statuses: proposed → under_review → certified → superseded
+Statuses: `proposed → under_review → certified → superseded`. The full lifecycle is supported and persists — once certified, the status is visible on subsequent RESOLVE calls in the quality envelope (`certified_by`, `certified_at`).
+
+`AUTHORITY` accepts either a bare identifier (`cfo`) or a quoted free-form string (`"agent:twin:michael"`, `"finance_team:q4_2026"`). The quoted form allows colons and other punctuation in opaque authority IDs. `EVIDENCE` is always a quoted string.
 
 ---
 
@@ -173,10 +194,12 @@ fallback_clause <- 'FALLBACK' sp scope (sp arrow sp scope)*
 
 discover <- 'DISCOVER' sp 'concepts' sp related_clause
            (sp within_clause)? (sp depth_clause)?
+           (sp direction_clause)?
            (sp annotate_clause)? (sp limit_clause)?
 related_clause <- 'RELATED' sp 'TO' sp (entity / string_literal)
 within_clause <- 'WITHIN' sp scope (',' sp scope)*
 depth_clause <- 'DEPTH' sp integer
+direction_clause <- 'DIRECTION' sp ('outbound' / 'inbound' / 'both')
 annotate_clause <- 'ANNOTATE' sp annotation_list
 limit_clause <- 'LIMIT' sp integer
 
@@ -185,7 +208,7 @@ certify <- 'CERTIFY' sp entity sp status_clause
            (sp certify_evidence)?
 status_clause <- 'STATUS' sp certify_status
 certify_status <- 'proposed' / 'under_review' / 'certified' / 'superseded'
-authority_clause <- 'AUTHORITY' sp identifier
+authority_clause <- 'AUTHORITY' sp (string_literal / identifier)
 supersedes_clause <- 'SUPERSEDES' sp entity
 certify_evidence <- 'EVIDENCE' sp string_literal
 
@@ -246,21 +269,29 @@ Scope is not a filter applied after retrieval. It is a fundamental part of query
 
 ```
 cqr_resolve:
-  input: {intent, entity?, scope?, freshness?, reputation?}
+  input: {entity, scope?, freshness?, reputation?}
   output: governed context with quality metadata envelope
 
 cqr_discover:
-  input: {topic, scope?, depth?}
-  output: neighborhood map with relationship types and quality annotations
+  input: {topic, scope?, depth?, direction?}
+  output: neighborhood map with relationship types, direction tags,
+          and quality annotations
+  direction: outbound | inbound | both (default: both)
 
 cqr_certify:
-  input: {definition, action: propose|review|approve, evidence?, scope?}
+  input: {entity, status, authority?, evidence?}
   output: certification status with provenance chain
+  authority: bare identifier OR quoted free-form string with colons
 ```
 
 ### Resources
 
 ```
+cqr://session         — Current agent identity, scope, permissions,
+                        visible_scopes (full bidirectional set), connected
+                        adapters, server_version, protocol (CQR/1.0),
+                        uptime_seconds, connection {transport, connected_at,
+                        session_id (UUIDv4)}
 cqr://scopes          — Organizational scope hierarchy
 cqr://entities        — Entity definitions with metadata
 cqr://policies        — Governance rules per scope
@@ -271,6 +302,15 @@ cqr://system_prompt   — CQR agent generation contract
 
 - **stdio** (primary): for Claude Desktop, Claude Code, Cursor
 - **SSE** (secondary): for remote/HTTP connections via Plug/Bandit
+
+### Agent Context
+
+The MCP server reads two environment variables to populate the agent context for every request:
+
+- `CQR_AGENT_ID` — agent identifier (default: `anonymous`)
+- `CQR_AGENT_SCOPE` — agent's active scope, in `scope:seg1:seg2` form (default: `scope:company`)
+
+These are surfaced verbatim through the `cqr://session` resource and used by the engine to compute `visible_scopes` (bidirectional: self + ancestors + descendants).
 
 ---
 
@@ -366,13 +406,13 @@ These are non-negotiable for every Claude Code session:
 
 ## 13. Spec Documents Reference
 
-Detailed specifications are in `/docs`:
-
 | Document | Contains |
 |---|---|
+| `README.md` (root) | **Canonical CQR Protocol Specification v1.0.** All 11 primitives in 5 categories, full grammar, return envelope, error semantics, MCP delivery. The user-facing spec. |
+| `specs/Assert primitive specification.md` | Detailed ASSERT primitive spec with two-tier trust model and certification lifecycle. GPG-signed for patent evidence. |
 | `docs/MCP-SERVER-PLAN.md` | Full phased build plan (Phases 0-6), risk register, timeline |
-| `docs/MVP2-DEVELOPER-TOOLS.md` | Developer tooling spec (Playground, Schema Builder, Governance Explorer, Generation Lab, Integration Console) |
-| `docs/CQR-TECHNICAL-SPEC.md` | Protocol specification, all 10 primitives, grammar, implementation notes |
+| `docs/UNICA-MVP2-Developer-Tools-Spec.md` | Developer tooling spec (Playground, Schema Builder, Governance Explorer, Generation Lab, Integration Console) |
+| `docs/CQR-TECHNICAL-SPEC.md` | **Historical** — V0.1 March 2026 draft, written before the SEQUR→CQR rename and the ASSERT/HYPOTHESIZE/COMPARE/ANCHOR additions. Superseded by `README.md`. Kept for patent-evidence continuity. |
 | `docs/VALIDATION-SUITE.md` | MVP1 validation suite spec, 100-intent corpus design, scoring engine |
 
 When working on a specific phase, read the relevant spec doc for full task details, exit criteria, and implementation notes.
