@@ -16,21 +16,21 @@ March 2026 (originally drafted under the SEQUR name, renamed April 2026)
 
 ## What Exists Today
 
-The current test harness consists of 55 ExUnit tests across unit and integration categories. These tests validate parser correctness, adapter functionality, engine fan-out, and the Teipsum Agent reasoning loop. They are development-quality tests, not a validation harness. There is no formal test suite for measuring LLM SEQUR generation accuracy, no versioned run tracking, no patent evidence capture, and no comparison baseline.
+The current test harness consists of 55 ExUnit tests across unit and integration categories. These tests validate parser correctness, adapter functionality, engine fan-out, and the Teipsum Agent reasoning loop. They are development-quality tests, not a validation harness. There is no formal test suite for measuring LLM CQR generation accuracy, no versioned run tracking, no patent evidence capture, and no comparison baseline.
 
 ### Existing Test Coverage
 
 | **Test Module** | **Count** | **What It Validates** |
 | --- | --- | --- |
-| Sequr.ParserTest | ~20 | Parser correctness for RESOLVE and DISCOVER primitives. Syntax variants, optional clause ordering, arrow formats, uppercase identifiers. |
-| Sequr.IntegrationTest | ~10 | End-to-end: parse SEQUR string, execute against real Postgres/Neo4j, verify return envelopes. Scope fallback, reputation filtering, DISCOVER graph traversal. |
-| Sequr.EngineTest | ~10 | Context Assembly Engine fan-out via Task.async_stream across adapters. Multi-adapter result merging, sources field attribution. |
+| Cqr.ParserTest | ~20 | Parser correctness for RESOLVE and DISCOVER primitives. Syntax variants, optional clause ordering, arrow formats, uppercase identifiers. |
+| Cqr.IntegrationTest | ~10 | End-to-end: parse CQR string, execute against real Postgres/Neo4j, verify return envelopes. Scope fallback, reputation filtering, DISCOVER graph traversal. |
+| Cqr.EngineTest | ~10 | Context Assembly Engine fan-out via Task.async_stream across adapters. Multi-adapter result merging, sources field attribution. |
 | Unica.AgentTwinTest | ~10 | GenServer lifecycle, multi-step reasoning loop (DISCOVER → rank → RESOLVE → synthesize), LLM integration. |
 | Adapter health checks | ~5 | Postgres and Neo4j connectivity and health_check/0 callback. |
 
 ### What These Tests Do Not Cover
 
-- LLM SEQUR generation accuracy against a controlled intent suite
+- LLM CQR generation accuracy against a controlled intent suite
 
 - Versioned run tracking across configuration changes
 
@@ -63,15 +63,15 @@ The validation test suite MVP1 serves three distinct audiences with different re
 
 ## Product Development
 
-Track SEQUR generation accuracy over time. Detect regressions when system prompts, few-shot examples, parser rules, schema, or models change. Identify systematic failure patterns by complexity tier and domain. Guide investment in fine-tuning, prompt engineering, and grammar simplification.
+Track CQR generation accuracy over time. Detect regressions when system prompts, few-shot examples, parser rules, schema, or models change. Identify systematic failure patterns by complexity tier and domain. Guide investment in fine-tuning, prompt engineering, and grammar simplification.
 
 ## Patent Filing
 
-Provide timestamped, cryptographically anchored evidence of reduction to practice. Demonstrate novelty through systematic RAG comparison. Capture full context chains showing the multi-adapter fan-out and merge algorithm in action. Document the capability gap between SEQUR-mediated context and traditional retrieval.
+Provide timestamped, cryptographically anchored evidence of reduction to practice. Demonstrate novelty through systematic RAG comparison. Capture full context chains showing the multi-adapter fan-out and merge algorithm in action. Document the capability gap between CQR-mediated context and traditional retrieval.
 
 ## Business Development
 
-Produce publishable accuracy numbers for conversations with co-founders, investors, and design partners. Show trajectory — accuracy improving over time as the system learns. Provide concrete evidence that the thesis holds: agents speaking SEQUR against a shared context fabric produces measurably better results than the current approach.
+Produce publishable accuracy numbers for conversations with co-founders, investors, and design partners. Show trajectory — accuracy improving over time as the system learns. Provide concrete evidence that the thesis holds: agents speaking CQR against a shared context fabric produces measurably better results than the current approach.
 
 # Feature Definitions
 
@@ -81,14 +81,14 @@ Produce publishable accuracy numbers for conversations with co-founders, investo
 
 ### Specification
 
-100 intents stratified by complexity and distributed across domains. Each intent includes the natural language question, the expected primitive type, and a gold standard SEQUR expression written by a human expert.
+100 intents stratified by complexity and distributed across domains. Each intent includes the natural language question, the expected primitive type, and a gold standard CQR expression written by a human expert.
 
 | **Tier** | **Count** | **Definition** | **Example Intent** |
 | --- | --- | --- | --- |
 | Simple | 40 | Single primitive (RESOLVE or DISCOVER), 1–2 parameters. | "What’s our current ARR?" |
 | Moderate | 35 | Single primitive, 3–4 parameters with constraints (freshness, reputation, scope, depth). | "Get the churn rate from product, must be less than a week old, include lineage." |
 | Complex | 15 | Single primitive, full parameter set with fallbacks, multiple scopes, annotations. | "Resolve ARR from finance with high reputation, fall back to product then global, include full lineage and owner." |
-| Multi-step | 10 | Intent requires 2+ SEQUR expressions in sequence. | "Find everything related to churn, then get the current value of the top driver." |
+| Multi-step | 10 | Intent requires 2+ CQR expressions in sequence. | "Find everything related to churn, then get the current value of the top driver." |
 
 ### Domain Distribution
 
@@ -102,7 +102,7 @@ Produce publishable accuracy numbers for conversations with co-founders, investo
 
 ### Gold Standard Requirements
 
-Each intent’s gold standard SEQUR expression must:
+Each intent’s gold standard CQR expression must:
 
 - Parse successfully against the current NimbleParsec grammar
 
@@ -110,7 +110,7 @@ Each intent’s gold standard SEQUR expression must:
 
 - Use the optimal primitive for the intent (not just a valid one)
 
-- Include appropriate optional clauses that a skilled SEQUR user would include
+- Include appropriate optional clauses that a skilled CQR user would include
 
 - Be reviewed by at least one other person before inclusion in the corpus
 
@@ -128,7 +128,7 @@ test_intents
 
   expected_primitive VARCHAR(20) NOT NULL -- RESOLVE|DISCOVER|MULTI
 
-  gold_sequr       TEXT NOT NULL          -- the human-authored gold standard expression
+  gold_cqr         TEXT NOT NULL          -- the human-authored gold standard expression
 
   gold_entities    JSONB                  -- expected entity references [{namespace, name}]
 
@@ -150,7 +150,7 @@ test_intents
 
 | **Field** | **Type** | **Source** | **Why It Matters** |
 | --- | --- | --- | --- |
-| model_name | VARCHAR | Ollama API or Claude API response | Different models produce different SEQUR. Must know which model produced which results. |
+| model_name | VARCHAR | Ollama API or Claude API response | Different models produce different CQR. Must know which model produced which results. |
 | model_version | VARCHAR | Model metadata | Same model name can have different quantizations or versions. |
 | system_prompt_hash | VARCHAR(64) | SHA-256 of the system prompt text | Few-shot examples and grammar reference change frequently. The hash tracks which version was active. |
 | system_prompt_text | TEXT | Full system prompt | The hash identifies; the full text enables reconstruction if needed. |
@@ -199,13 +199,13 @@ test_runs
 
 ## F3: Automated Scoring Engine
 
-**Purpose: **Score every generated SEQUR expression on three axes automatically, with optional human/LLM-judge scoring for intent fidelity.
+**Purpose: **Score every generated CQR expression on three axes automatically, with optional human/LLM-judge scoring for intent fidelity.
 
 ### Scoring Axes
 
 | **Axis** | **Method** | **Score Type** | **Automation Level** |
 | --- | --- | --- | --- |
-| Syntactic accuracy | Pass the generated expression through Sequr.Parser.parse/1. Binary pass/fail. | Boolean (1 or 0) | Fully automated |
+| Syntactic accuracy | Pass the generated expression through Cqr.Parser.parse/1. Binary pass/fail. | Boolean (1 or 0) | Fully automated |
 | Semantic accuracy | If parsed, validate that all entity references exist in the schema and all scope references exist. Validate parameter types (durations, scores, depths). | Boolean (1 or 0) | Fully automated |
 | Intent fidelity | Compare the generated expression to the gold standard. Score 1–5 on whether it captures the human’s actual intent. Can be human-evaluated or LLM-judge evaluated. | Integer 1–5 | Semi-automated (LLM judge with human override) |
 
@@ -221,7 +221,7 @@ test_runs
 
 ### LLM Judge Implementation
 
-For MVP1, intent fidelity scoring uses a second LLM call (the "judge") that receives the natural language intent, the gold standard SEQUR, and the generated SEQUR, then returns a score 1–5 with rationale. The judge prompt must be deterministic — same inputs should produce same scores. Human override is available for disputed scores.
+For MVP1, intent fidelity scoring uses a second LLM call (the "judge") that receives the natural language intent, the gold standard CQR, and the generated CQR, then returns a score 1–5 with rationale. The judge prompt must be deterministic — same inputs should produce same scores. Human override is available for disputed scores.
 
 The judge model should be a frontier model (Claude API) even when the generation model is a local model. This ensures the judge is more capable than the generator.
 
@@ -239,7 +239,7 @@ test_results
 
   llm_raw_response    TEXT           -- full LLM response before extraction
 
-  generated_sequr     TEXT           -- extracted SEQUR expression
+  generated_cqr       TEXT           -- extracted CQR expression
 
   generation_time_ms  INTEGER        -- latency for this single generation
 
@@ -267,7 +267,7 @@ test_results
 
   context_chain       JSONB          -- full DISCOVER->rank->RESOLVE->synthesize chain
 
-  execution_result    JSONB          -- the actual SEQUR execution output (if executed)
+  execution_result    JSONB          -- the actual CQR execution output (if executed)
 
   -- Failure categorization
 
@@ -279,13 +279,13 @@ test_results
 
 ## F4: Patent Evidence Capture
 
-**Purpose: **Systematically collect evidence that supports the three patent claims: SEQUR specification, semantic governance process, and context assembly algorithm.
+**Purpose: **Systematically collect evidence that supports the three patent claims: CQR specification, semantic governance process, and context assembly algorithm.
 
 ### Evidence Requirements by Claim
 
-**Claim 1 — SEQUR Specification: **Demonstrate that SEQUR is a functional, novel query language that agents can reliably generate and that produces meaningful results.
+**Claim 1 — CQR Specification: **Demonstrate that CQR is a functional, novel query language that agents can reliably generate and that produces meaningful results.
 
-- Reduction to practice: timestamped test runs proving the parser works, agents generate valid SEQUR, and the expressions produce real context retrieval results.
+- Reduction to practice: timestamped test runs proving the parser works, agents generate valid CQR, and the expressions produce real context retrieval results.
 
 - Novelty: no prior art demonstrates a declarative query language designed for machine cognition that maps to cognitive operations (resolve, discover, trace) rather than data operations (select, join, filter).
 
@@ -309,7 +309,7 @@ comparison_runs
 
   id                  UUID PRIMARY KEY
 
-  run_id              UUID REFERENCES test_runs(id)  -- the SEQUR run being compared
+  run_id              UUID REFERENCES test_runs(id)  -- the CQR run being compared
 
   baseline_system     VARCHAR NOT NULL  -- 'langchain_rag'|'direct_sql'|'direct_cypher'
 
@@ -319,7 +319,7 @@ comparison_runs
 
   baseline_result     JSONB             -- what the baseline system returned
 
-  capability_gaps     JSONB             -- structured list of what SEQUR returned
+  capability_gaps     JSONB             -- structured list of what CQR returned
 
                                         -- that the baseline could not
 
@@ -353,9 +353,9 @@ After each test run completes, the full results are hashed and committed to git 
 
 - Load all test_intents for the active corpus version.
 
-- For each intent, sequentially: send the natural language to the LLM with the standard system prompt, capture the raw response, extract the SEQUR expression, attempt to parse it, validate entity/scope references, score intent fidelity via LLM judge.
+- For each intent, sequentially: send the natural language to the LLM with the standard system prompt, capture the raw response, extract the CQR expression, attempt to parse it, validate entity/scope references, score intent fidelity via LLM judge.
 
-- Optionally execute the parsed SEQUR through Sequr.Engine and capture the full context chain and adapter-level results.
+- Optionally execute the parsed CQR through Cqr.Engine and capture the full context chain and adapter-level results.
 
 - Write each test_results record as it completes (not batch at end — fault tolerance).
 
@@ -403,11 +403,11 @@ end
 
 **Domain Breakdown: **Bar chart showing accuracy scores broken down by domain. Immediately answers: are finance intents accurate but HR intents failing?
 
-**Failure Analysis: **Table of failed intents with: the natural language input, the generated SEQUR, the gold standard, the parse error or semantic error, and the failure category. Filterable by tier, domain, and failure category.
+**Failure Analysis: **Table of failed intents with: the natural language input, the generated CQR, the gold standard, the parse error or semantic error, and the failure category. Filterable by tier, domain, and failure category.
 
 **Trend Over Time: **Line chart showing syntactic accuracy, semantic accuracy, and intent fidelity across all runs. X-axis is run timestamp. Hover shows the configuration fingerprint for each run. Immediately answers: is the system getting better?
 
-**Run Comparison: **Select two runs side by side. For each intent, show: did the score change? What was the generated SEQUR in each run? Highlight regressions (passed before, failed now) in red.
+**Run Comparison: **Select two runs side by side. For each intent, show: did the score change? What was the generated CQR in each run? Highlight regressions (passed before, failed now) in red.
 
 **Regression Detection: **Automated flag on any intent that passed syntactically or semantically in the previous run but failed in the current run. These regressions require investigation before the run is considered valid.
 
@@ -417,7 +417,7 @@ The dashboard is a Phoenix LiveView mounted at /validation in the existing Phoen
 
 ## F7: RAG Comparison Baseline
 
-**Purpose: **Run a subset of test intents through a standard RAG pipeline using the same data and same LLM, and systematically document what SEQUR produces that RAG cannot.
+**Purpose: **Run a subset of test intents through a standard RAG pipeline using the same data and same LLM, and systematically document what CQR produces that RAG cannot.
 
 ### MVP1 Scope
 
@@ -425,21 +425,21 @@ For MVP1, the RAG comparison does not need to be fully automated. A manual or se
 
 ### Baseline System
 
-The baseline is a standard retrieval pipeline: the same LLM receives the same natural language intent, but instead of generating SEQUR, it has access to direct tool calls against the same Postgres and Neo4j backends. The tools are: query_postgres(sql), query_neo4j(cypher), search_vectors(query_text). The LLM decides which tools to call and how to combine results.
+The baseline is a standard retrieval pipeline: the same LLM receives the same natural language intent, but instead of generating CQR, it has access to direct tool calls against the same Postgres and Neo4j backends. The tools are: query_postgres(sql), query_neo4j(cypher), search_vectors(query_text). The LLM decides which tools to call and how to combine results.
 
 ### Capability Gap Documentation
 
-For each compared intent, the capability_gaps field captures structured evidence of what SEQUR provides that the RAG baseline cannot:
+For each compared intent, the capability_gaps field captures structured evidence of what CQR provides that the RAG baseline cannot:
 
-- **Scope-aware filtering: **Did SEQUR return results scoped to organizational boundaries that RAG returned without scope context?
+- **Scope-aware filtering: **Did CQR return results scoped to organizational boundaries that RAG returned without scope context?
 
-- **Quality metadata: **Did SEQUR return freshness, reputation, confidence, lineage that RAG did not?
+- **Quality metadata: **Did CQR return freshness, reputation, confidence, lineage that RAG did not?
 
-- **Cross-adapter merging: **Did SEQUR merge graph traversal results with vector similarity results into a coherent neighborhood that RAG retrieved separately without merging?
+- **Cross-adapter merging: **Did CQR merge graph traversal results with vector similarity results into a coherent neighborhood that RAG retrieved separately without merging?
 
-- **Causal chain discovery: **Did SEQUR discover multi-hop causal relationships (e.g., eNPS → attrition → operating_expenses) that RAG’s individual queries missed?
+- **Causal chain discovery: **Did CQR discover multi-hop causal relationships (e.g., eNPS → attrition → operating_expenses) that RAG’s individual queries missed?
 
-- **Attribution: **Did SEQUR identify which adapter contributed each piece of context, enabling the agent to reason about source reliability?
+- **Attribution: **Did CQR identify which adapter contributed each piece of context, enabling the agent to reason about source reliability?
 
 # Improvements Over Previously Discussed Design
 
@@ -454,14 +454,14 @@ The earlier discussion mentioned tracking failures but did not define a taxonomy
 | parse_error | Expression does not parse against the NimbleParsec grammar. | Grammar simplification, additional few-shot examples, constrained decoding. |
 | wrong_entity | Parsed, but references an entity that does not exist in the schema. | Improve schema presentation in system prompt, add entity lookup examples. |
 | wrong_primitive | Parsed and valid entities, but used RESOLVE when DISCOVER was appropriate (or vice versa). | Add primitive selection examples, clarify when to use each. |
-| invented_syntax | LLM generated syntax constructs that do not exist in SEQUR (e.g., multiple anchors, nested expressions). | Add negative examples to system prompt. |
+| invented_syntax | LLM generated syntax constructs that do not exist in CQR (e.g., multiple anchors, nested expressions). | Add negative examples to system prompt. |
 | wrong_scope | Correct entity but queried from a scope that doesn’t contain it. | Improve scope-entity mapping in schema format. |
 | parameter_error | Correct primitive and entity but invalid parameter values (e.g., non-numeric depth, malformed duration). | Add parameter constraint examples. |
 | partial_intent | Captures part of the intent but misses a significant aspect (e.g., user asked for freshness constraint, LLM omitted it). | More complete few-shot examples with full parameter sets. |
 
 ## Execution Mode Toggle
 
-The original design assumed all test intents would be both generated and executed. MVP1 adds a toggle: generation-only mode (score the SEQUR expression without executing it against the engine) and full-execution mode (generate, score, and execute through the engine with full context chain capture). Generation-only mode is faster, cheaper (no adapter calls), and sufficient for syntax/semantic/fidelity scoring. Full-execution mode is required for patent evidence capture and RAG comparison.
+The original design assumed all test intents would be both generated and executed. MVP1 adds a toggle: generation-only mode (score the CQR expression without executing it against the engine) and full-execution mode (generate, score, and execute through the engine with full context chain capture). Generation-only mode is faster, cheaper (no adapter calls), and sufficient for syntax/semantic/fidelity scoring. Full-execution mode is required for patent evidence capture and RAG comparison.
 
 ## Corpus Versioning
 
@@ -517,7 +517,7 @@ MVP1 is scoped for approximately 2 weeks of development using Claude Code as the
 
 - Export to patent-filing format (structured evidence package for provisional application)
 
-- Fine-tuning data generation (use failures to generate training pairs for a SEQUR-specialized model)
+- Fine-tuning data generation (use failures to generate training pairs for a CQR-specialized model)
 
 - CI integration (run validation suite on every parser commit, fail the build on regression)
 
