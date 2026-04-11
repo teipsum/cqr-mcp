@@ -1,0 +1,39 @@
+# Release workflow — precompiled NIF binaries.
+#
+# This is a STUB. It will be fleshed out once the project adopts
+# `rustler_precompiled` so that consumers of `cqr_mcp` (and anyone
+# who depends on the `cqr_grafeo` NIF) do not need a Rust toolchain
+# at install time.
+#
+# Trigger: on tag push matching `v*` (e.g. `v0.1.0`).
+#
+# Targets for precompiled NIF binaries:
+#   - aarch64-apple-darwin       (macOS ARM — M1/M2/M3/M4/M5)
+#   - x86_64-apple-darwin        (macOS Intel)
+#   - x86_64-unknown-linux-gnu   (Linux x86_64)
+#   - aarch64-unknown-linux-gnu  (Linux ARM64)
+#
+# Implementation notes when wiring this up:
+#   - Use `philss/rustler-precompiled-action` to cross-compile and
+#     attach artifacts to a GitHub release.
+#   - The macOS targets require macos-13 (Intel) and macos-14 (ARM)
+#     runners respectively.
+#   - The aarch64 Linux target cross-compiles from ubuntu-latest via
+#     cross-rs or a cargo-zigbuild toolchain.
+#   - Checksums (.tar.gz.sha256) must be published alongside each
+#     artifact so `rustler_precompiled` can verify them.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  noop:
+    name: stub
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "Release workflow not yet implemented — see comments at top of this file."
