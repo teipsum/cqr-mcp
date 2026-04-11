@@ -720,7 +720,7 @@ defmodule Cqr.Adapter.Grafeo do
 
   defp parse_timestamp(_), do: nil
 
-  defp normalize_discovery(related, anchor_entity, _expression) do
+  defp normalize_discovery(related, _anchor_entity, _expression) do
     quality =
       case related do
         [] ->
