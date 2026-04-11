@@ -47,10 +47,11 @@ defmodule Cqr.Adapter.Grafeo do
     visible = scope_context[:visible_scopes] || []
     depth = expression.depth || 2
     direction = expression.direction || :both
+    limit = expression.limit
 
     case related_to do
       {:entity, entity} ->
-        case fetch_related(entity, depth, visible, direction) do
+        case fetch_related(entity, depth, visible, direction, limit) do
           {:ok, related} ->
             result = normalize_discovery(related, entity, expression)
             {:ok, result}
@@ -68,17 +69,22 @@ defmodule Cqr.Adapter.Grafeo do
   # Dispatch to the right semantic query (or both) based on the requested
   # edge direction. Edges are stored once, directionally; "both" performs
   # two queries and unions the results, tagged with their direction.
-  defp fetch_related(entity, depth, visible, :outbound) do
-    Semantic.related_entities(entity, depth, visible)
+  # The `limit` is passed through to the underlying Cypher LIMIT clause
+  # so high-degree hub entities cannot materialize an unbounded result
+  # set through the NIF. For the `:both` case each side is capped
+  # independently; the union may exceed the limit by up to 2× which is
+  # acceptable for a governance budget.
+  defp fetch_related(entity, depth, visible, :outbound, limit) do
+    Semantic.related_entities(entity, depth, visible, limit)
   end
 
-  defp fetch_related(entity, depth, visible, :inbound) do
-    Semantic.related_entities_inbound(entity, depth, visible)
+  defp fetch_related(entity, depth, visible, :inbound, limit) do
+    Semantic.related_entities_inbound(entity, depth, visible, limit)
   end
 
-  defp fetch_related(entity, depth, visible, :both) do
-    with {:ok, out} <- Semantic.related_entities(entity, depth, visible),
-         {:ok, inb} <- Semantic.related_entities_inbound(entity, depth, visible) do
+  defp fetch_related(entity, depth, visible, :both, limit) do
+    with {:ok, out} <- Semantic.related_entities(entity, depth, visible, limit),
+         {:ok, inb} <- Semantic.related_entities_inbound(entity, depth, visible, limit) do
       {:ok, out ++ inb}
     end
   end
