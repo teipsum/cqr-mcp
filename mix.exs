@@ -68,8 +68,11 @@ defmodule CqrMcp.MixProject do
       extras: [
         "README.md",
         "CONTRIBUTING.md",
+        "LICENSE",
         "docs/architecture.md",
-        "docs/cqr-primer.md"
+        "docs/cqr-primer.md",
+        "docs/cqr-protocol-specification.md",
+        "docs/mcp-integration.md"
       ]
     ]
   end

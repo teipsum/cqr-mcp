@@ -1,5 +1,12 @@
 defmodule CqrMcp.Application do
-  @moduledoc false
+  @moduledoc """
+  OTP application entry point for the CQR MCP server.
+
+  Boots the supervision tree (embedded Grafeo NIF server, scope tree cache,
+  MCP transport server) under a `:one_for_one` strategy and registers a
+  session identity in `:persistent_term` so `cqr://session` can serve it
+  without a process hop.
+  """
 
   use Application
 
