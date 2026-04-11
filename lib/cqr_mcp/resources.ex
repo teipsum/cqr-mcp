@@ -81,7 +81,7 @@ defmodule CqrMcp.Resources do
       "agent_id" => agent_id,
       "agent_scope" => Types.format_scope(agent_scope_segments),
       "visible_scopes" => visible,
-      "permissions" => ["resolve", "discover", "certify"],
+      "permissions" => ["resolve", "discover", "certify", "assert", "trace", "signal", "refresh"],
       "connected_adapters" => ["grafeo"],
       "server_version" => server_version(),
       "protocol" => "CQR/1.0",
@@ -229,6 +229,21 @@ defmodule CqrMcp.Resources do
     CERTIFY entity:namespace:name STATUS proposed|under_review|certified|superseded [AUTHORITY id] [EVIDENCE "..."]
     ```
 
+    ### TRACE -- Walk the provenance chain
+    ```
+    TRACE entity:namespace:name [OVER last <duration>] [DEPTH causal:<n>] [INCLUDE state_transitions, actors, triggers]
+    ```
+
+    ### SIGNAL -- Write a reputation assessment
+    ```
+    SIGNAL reputation ON entity:namespace:name SCORE <0.0-1.0> EVIDENCE "rationale" [AGENT agent:id]
+    ```
+
+    ### REFRESH -- Scan for stale context
+    ```
+    REFRESH CHECK active_context [WITHIN scope:...] [WHERE age > <duration>] [RETURN stale_items]
+    ```
+
     ## Available Scopes
     #{Enum.join(scope_tree, "\n")}
 
@@ -248,6 +263,15 @@ defmodule CqrMcp.Resources do
 
     User: "Show me ARR but only if it's recent and trustworthy"
     CQR: RESOLVE entity:finance:arr WITH freshness < 24h WITH reputation > 0.8
+
+    User: "How did the churn_rate metric come to exist and who signed off?"
+    CQR: TRACE entity:product:churn_rate DEPTH causal:2
+
+    User: "Mark the burn_rate as unreliable because the upstream pipeline broke"
+    CQR: SIGNAL reputation ON entity:finance:burn_rate SCORE 0.3 EVIDENCE "upstream ETL failed overnight"
+
+    User: "What context is stale and needs refreshing?"
+    CQR: REFRESH CHECK active_context WHERE age > 24h RETURN stale_items
 
     ## Quality Metadata
     Every response includes: freshness, confidence, reputation, owner, lineage, certification status.
