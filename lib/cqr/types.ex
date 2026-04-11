@@ -29,7 +29,7 @@ defmodule Cqr.Types do
 
   Each segment must be a non-empty string matching `[a-z_][a-z0-9_]*`.
   """
-  def valid_scope?(segments) when is_list(segments) and length(segments) > 0 do
+  def valid_scope?([_ | _] = segments) do
     Enum.all?(segments, &valid_identifier?/1)
   end
 

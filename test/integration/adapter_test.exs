@@ -52,7 +52,7 @@ defmodule Cqr.Integration.AdapterTest do
       {:ok, result} = GrafeoAdapter.discover(expression, scope, [])
 
       assert %Cqr.Result{} = result
-      assert length(result.data) > 0
+      assert [_ | _] = result.data
       assert "grafeo" in result.sources
     end
 
@@ -79,7 +79,7 @@ defmodule Cqr.Integration.AdapterTest do
       {:ok, result} = GrafeoAdapter.discover(expression, @finance_scope, [])
 
       # Finance scope agent sees finance revenue entities.
-      assert length(result.data) > 0
+      assert [_ | _] = result.data
 
       # Every returned row carries source attribution.
       Enum.each(result.data, fn row ->

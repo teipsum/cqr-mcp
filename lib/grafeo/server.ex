@@ -14,6 +14,9 @@ defmodule Cqr.Grafeo.Server do
 
   use GenServer
 
+  alias Cqr.Grafeo.Native
+  alias Cqr.Repo.Seed
+
   require Logger
 
   @default_name __MODULE__
@@ -47,7 +50,7 @@ defmodule Cqr.Grafeo.Server do
         Logger.info("Grafeo embedded database started (#{storage_label(storage)})")
 
         if seed do
-          Cqr.Repo.Seed.seed_if_empty_direct(db)
+          Seed.seed_if_empty_direct(db)
         end
 
         {:ok, %{db: db, storage: storage}}
@@ -59,31 +62,31 @@ defmodule Cqr.Grafeo.Server do
 
   @impl true
   def handle_call({:query, query_string}, _from, %{db: db} = state) do
-    result = Cqr.Grafeo.Native.execute(db, query_string)
+    result = Native.execute(db, query_string)
     {:reply, result, state}
   end
 
   def handle_call(:health, _from, %{db: db} = state) do
-    result = Cqr.Grafeo.Native.health_check(db)
+    result = Native.health_check(db)
     {:reply, result, state}
   end
 
   @impl true
   def terminate(_reason, %{db: db}) do
-    Cqr.Grafeo.Native.close(db)
+    Native.close(db)
     :ok
   end
 
   # --- Private ---
 
   defp open_database(:memory) do
-    {:ok, _db} = Cqr.Grafeo.Native.new(:memory)
+    {:ok, _db} = Native.new(:memory)
   rescue
     e -> {:error, Exception.message(e)}
   end
 
   defp open_database({:path, path}) do
-    {:ok, _db} = Cqr.Grafeo.Native.new(path)
+    {:ok, _db} = Native.new(path)
   rescue
     e -> {:error, Exception.message(e)}
   end
