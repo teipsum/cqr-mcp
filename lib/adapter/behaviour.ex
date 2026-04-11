@@ -15,9 +15,14 @@ defmodule Cqr.Adapter.Behaviour do
   @callback discover(expression :: term(), scope_context :: term(), opts :: keyword()) ::
               {:ok, term()} | {:error, term()}
 
+  @callback assert(expression :: term(), scope_context :: term(), opts :: keyword()) ::
+              {:ok, term()} | {:error, term()}
+
   @callback normalize(raw_results :: term(), metadata :: term()) :: term()
 
   @callback health_check() :: :ok | {:error, term()}
 
   @callback capabilities() :: [atom()]
+
+  @optional_callbacks [assert: 3]
 end

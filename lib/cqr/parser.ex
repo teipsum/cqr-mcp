@@ -18,14 +18,15 @@ defmodule Cqr.Parser do
 
   import NimbleParsec
 
-  alias Cqr.Parser.{Resolve, Discover, Certify}
+  alias Cqr.Parser.{Resolve, Discover, Certify, Assert}
 
   defparsec(
     :parse_expression,
     choice([
       Resolve.resolve(),
       Discover.discover(),
-      Certify.certify()
+      Certify.certify(),
+      Assert.assert_expression()
     ])
     |> eos()
   )
@@ -94,8 +95,11 @@ defmodule Cqr.Parser do
       String.starts_with?(rest, "CERTIF") ->
         "Did you mean CERTIFY?"
 
+      String.starts_with?(rest, "ASSER") ->
+        "Did you mean ASSERT?"
+
       true ->
-        "Expression must start with RESOLVE, DISCOVER, or CERTIFY. Unexpected: \"#{String.slice(rest, 0, 20)}\""
+        "Expression must start with RESOLVE, DISCOVER, CERTIFY, or ASSERT. Unexpected: \"#{String.slice(rest, 0, 20)}\""
     end
   end
 end
