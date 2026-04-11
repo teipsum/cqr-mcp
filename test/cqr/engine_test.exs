@@ -187,14 +187,15 @@ defmodule Cqr.EngineTest do
         @finance_context
       )
 
-      # Verify governance record was written
+      # CERTIFY writes an immutable CertificationRecord per phase transition.
       {:ok, rows} =
         Cqr.Grafeo.Server.query(
-          "MATCH (g:GovernanceRecord {entity_name: 'ltv'}) RETURN g.status, g.authority"
+          "MATCH (r:CertificationRecord {entity_name: 'ltv'}) " <>
+            "RETURN r.new_status, r.authority"
         )
 
       assert length(rows) > 0
-      assert hd(rows)["g.status"] == "proposed"
+      assert Enum.any?(rows, fn row -> row["r.new_status"] == "proposed" end)
     end
   end
 
