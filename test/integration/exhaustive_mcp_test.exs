@@ -1328,6 +1328,67 @@ defmodule Cqr.Integration.ExhaustiveMcpTest do
       {us, {:ok, %Cqr.Result{}}} = Task.await(task, @timeout_ms)
       assert us / 1_000 < 1_000
     end
+
+    # Regression: an entity with two different relationship types pointing at
+    # the SAME target produces a `conflicts` list whose inner maps carry an
+    # `{ns, name}` tuple as the `entity` key. CqrMcp.Tools.format_result only
+    # ran format_data_item on the top-level map of each conflict — the nested
+    # `conflicting_values` list was passed through untouched, so Jason.encode!
+    # in the MCP handler raised Protocol.UndefinedError on the tuple and the
+    # response never made it back to the client (observed as a stdio hang).
+    # This test exercises the full Tools.call -> Jason.encode! path that the
+    # stdio handler uses, so any future tuple leak into the serialized result
+    # fails here instead of silently hanging a real MCP client.
+    test "J06 dup-target conflicts survive Jason encoding (MCP serialization)" do
+      args = %{
+        "entity" => "entity:test_exh:j06_dup",
+        "type" => "derived_metric",
+        "description" => "dup-target MCP serialization regression",
+        "intent" => "Exercise the Jason.encode! path in the MCP handler",
+        "derived_from" => "entity:product:nps",
+        "relationships" => "DEPENDS_ON:entity:product:nps:0.8"
+      }
+
+      assert {:ok, %{"data" => [%{"name" => "j06_dup"}]}} =
+               CqrMcp.Tools.call("cqr_assert", args, @product_context)
+
+      discover_args = %{
+        "topic" => "entity:test_exh:j06_dup",
+        "direction" => "outbound",
+        "depth" => 1
+      }
+
+      assert {:ok, result} =
+               CqrMcp.Tools.call("cqr_discover", discover_args, @product_context)
+
+      # Full JSON encode of the result — this is exactly what the MCP handler
+      # does on line 79 of handler.ex. If format_value ever leaks a tuple
+      # through into the serialized map, this raises.
+      json = Jason.encode!(result, pretty: true)
+      assert is_binary(json)
+
+      # Round-trip through decode to prove no tuple slipped through as a
+      # string-encoded map key like "{\"product\", \"nps\"}".
+      decoded = Jason.decode!(json)
+
+      # Both edges must be present in data.
+      rel_types =
+        decoded["data"]
+        |> Enum.map(& &1["relationship"])
+        |> Enum.sort()
+
+      assert rel_types == ["DEPENDS_ON", "DERIVED_FROM"]
+
+      # Conflicts must list the duplicated entity with its two edges,
+      # every nested `entity` key normalized to the "ns:name" string.
+      assert [conflict] = decoded["conflicts"]
+      assert conflict["entity"] == "product:nps"
+      assert length(conflict["conflicting_values"]) == 2
+
+      for inner <- conflict["conflicting_values"] do
+        assert inner["entity"] == "product:nps"
+      end
+    end
   end
 
   # ╔══════════════════════════════════════════════════════════════════════╗
