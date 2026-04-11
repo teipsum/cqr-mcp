@@ -62,7 +62,7 @@ defmodule CqrMcp.Handler do
     context = agent_context()
     task = Task.async(fn -> CqrMcp.Tools.call(name, args, context) end)
 
-    case Task.yield(task, 3_000) || Task.shutdown(task, :brutal_kill) do
+    case Task.yield(task, 3_000) do
       {:ok, {:ok, result}} ->
         {:result,
          %{
