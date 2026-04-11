@@ -18,6 +18,7 @@ defmodule Cqr.Engine.Certify do
   """
 
   alias Cqr.Grafeo.Server, as: GrafeoServer
+  alias Cqr.Repo.ScopeTree
   alias Cqr.Repo.Semantic
 
   @valid_transitions %{
@@ -53,7 +54,7 @@ defmodule Cqr.Engine.Certify do
          :ok <- update_entity_node(entity, new_status, certify, new_reputation, now),
          :ok <- maybe_handle_supersedes(certify) do
       if certify.supersedes do
-        Cqr.Repo.ScopeTree.reload()
+        ScopeTree.reload()
       end
 
       {:ok, build_result(certify, agent_id, current_status, new_reputation, now)}

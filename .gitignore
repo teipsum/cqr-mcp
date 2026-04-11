@@ -17,6 +17,7 @@ native/cqr_grafeo/target/
 
 # IDE
 .elixir_ls/
+.expert/
 .vscode/
 .idea/
 

@@ -14,7 +14,7 @@ defmodule Cqr.Engine do
   See PROJECT_KNOWLEDGE.md Section 3.3 for the data flow.
   """
 
-  alias Cqr.Engine.{Planner, Certify, Assert}
+  alias Cqr.Engine.{Assert, Certify, Planner}
 
   @doc """
   Execute a CQR expression within an agent context.

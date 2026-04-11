@@ -183,19 +183,20 @@ defmodule Cqr.Repo.Semantic do
     Enum.filter(rows, fn row ->
       {ns, name} = {row["#{prefix}.namespace"], row["#{prefix}.name"]}
 
-      case Cqr.Grafeo.Server.query(
-             "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>
-               "-[:IN_SCOPE]->(s:Scope) RETURN s.path"
-           ) do
-        {:ok, scope_rows} ->
-          visible_keys = Enum.map(visible_scope_paths, &Enum.join(&1, ":"))
-          Enum.any?(scope_rows, fn sr -> sr["s.path"] in visible_keys end)
+      query =
+        "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>
+          "-[:IN_SCOPE]->(s:Scope) RETURN s.path"
 
-        _ ->
-          false
-      end
+      entity_in_visible_scope?(GrafeoServer.query(query), visible_scope_paths)
     end)
   end
+
+  defp entity_in_visible_scope?({:ok, scope_rows}, visible_scope_paths) do
+    visible_keys = Enum.map(visible_scope_paths, &Enum.join(&1, ":"))
+    Enum.any?(scope_rows, fn sr -> sr["s.path"] in visible_keys end)
+  end
+
+  defp entity_in_visible_scope?(_other, _visible_scope_paths), do: false
 
   defp build_entity(rows) do
     first = hd(rows)

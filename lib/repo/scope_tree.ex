@@ -13,6 +13,8 @@ defmodule Cqr.Repo.ScopeTree do
 
   use GenServer
 
+  alias Cqr.Grafeo.Server, as: GrafeoServer
+
   require Logger
 
   @table :cqr_scope_tree
@@ -101,9 +103,7 @@ defmodule Cqr.Repo.ScopeTree do
 
   defp load_from_grafeo do
     # Load all scopes
-    case Cqr.Grafeo.Server.query(
-           "MATCH (s:Scope) RETURN s.name, s.path, s.level ORDER BY s.level"
-         ) do
+    case GrafeoServer.query("MATCH (s:Scope) RETURN s.name, s.path, s.level ORDER BY s.level") do
       {:ok, rows} ->
         for row <- rows do
           path = row["s.path"]
@@ -124,7 +124,7 @@ defmodule Cqr.Repo.ScopeTree do
     end
 
     # Load parent-child relationships
-    case Cqr.Grafeo.Server.query(
+    case GrafeoServer.query(
            "MATCH (child:Scope)-[:CHILD_OF]->(parent:Scope) RETURN child.path, parent.path"
          ) do
       {:ok, rows} ->

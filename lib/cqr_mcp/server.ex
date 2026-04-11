@@ -50,7 +50,7 @@ defmodule CqrMcp.Server do
         error = %{
           "jsonrpc" => "2.0",
           "id" => nil,
-          "error" => %{"code" => -32700, "message" => "Parse error"}
+          "error" => %{"code" => -32_700, "message" => "Parse error"}
         }
 
         write_response(error)

@@ -243,7 +243,7 @@ defmodule CqrMcp.HandlerTest do
         })
 
       assert response["error"] != nil
-      assert response["error"]["code"] == -32602
+      assert response["error"]["code"] == -32_602
     end
   end
 
@@ -351,7 +351,7 @@ defmodule CqrMcp.HandlerTest do
           "method" => "unknown/method"
         })
 
-      assert response["error"]["code"] == -32601
+      assert response["error"]["code"] == -32_601
     end
   end
 

@@ -49,7 +49,7 @@ defmodule Cqr.Integration.DiscoverMultiParadigmTest do
 
       # All returned entities must be in the finance scope (the only
       # scope visible to the finance agent apart from company root).
-      assert length(result.data) > 0
+      assert [_ | _] = result.data
 
       # Every result must mention "revenue" in its name or description
       # OR have a non-zero vector similarity (dual-modality merge).
@@ -85,7 +85,7 @@ defmodule Cqr.Integration.DiscoverMultiParadigmTest do
                  @company_context
                )
 
-      assert length(result.data) > 0
+      assert [_ | _] = result.data
 
       # Every result with an embedding must carry a numeric similarity.
       # `csat` (customer_success) shares tokens "customer" and
@@ -142,7 +142,7 @@ defmodule Cqr.Integration.DiscoverMultiParadigmTest do
       assert {:ok, result} =
                Engine.execute(~s(DISCOVER concepts RELATED TO "revenue"), @company_context)
 
-      assert length(result.data) > 0
+      assert [_ | _] = result.data
 
       Enum.each(result.data, fn row ->
         assert row.source in ["text", "vector", "both"],
