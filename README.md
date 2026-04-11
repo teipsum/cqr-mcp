@@ -37,6 +37,22 @@ mix run --no-halt
 
 On first boot the embedded Grafeo database is created in-memory, a sample organizational dataset (6 scopes, 27 entities, 17 typed relationships) is seeded, and the server begins listening on stdio for MCP connections.
 
+### Persistent storage
+
+By default the server runs in-memory with sample data — every restart is a fresh database.
+To persist data across restarts:
+
+    mix run --no-halt -- --persist
+
+Data is stored at `~/.cqr/grafeo.db`. Persistent mode starts with an empty database —
+populate it with `cqr_assert` or adapter imports. To use a custom path:
+
+    mix run --no-halt -- --persist /path/to/db
+
+To reset the database and re-seed with sample data:
+
+    mix run --no-halt -- --persist --reset
+
 ### Connect from Claude Desktop
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):

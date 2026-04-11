@@ -30,6 +30,28 @@ How to connect CQR MCP Server to your MCP client. All examples assume the server
 
 Replace `/path/to/elixir` with the output of `which elixir` and `/path/to/cqr-mcp` with the absolute path to the cloned repository. Restart Claude Desktop after editing the config.
 
+### Persistent storage
+
+The configuration above runs in-memory — the sample dataset is seeded on every launch and any data asserted via `cqr_assert` is lost when Claude Desktop restarts. To persist data across restarts, append `--persist` after a `--` separator so Mix forwards it as a script argument:
+
+```json
+{
+  "mcpServers": {
+    "cqr": {
+      "command": "/path/to/elixir",
+      "args": ["--sname", "cqr", "-S", "mix", "run", "--no-halt", "--", "--persist"],
+      "cwd": "/path/to/cqr-mcp",
+      "env": {
+        "CQR_AGENT_ID": "twin:your_name",
+        "CQR_AGENT_SCOPE": "scope:company"
+      }
+    }
+  }
+}
+```
+
+Persistent mode opens (or creates) `~/.cqr/grafeo.db` and does **not** seed the sample dataset. Supply a path after `--persist` to choose a custom location, or append `--reset` to wipe the database and re-seed the sample data as a factory reset.
+
 ### Verification
 
 Once Claude Desktop reconnects:
