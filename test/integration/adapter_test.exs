@@ -74,10 +74,33 @@ defmodule Cqr.Integration.AdapterTest do
       assert product_entities == []
     end
 
-    test "search-based discovery returns empty for V1" do
+    test "search-based discovery runs text + vector pipeline scoped to agent visibility" do
       expression = %Cqr.Discover{related_to: {:search, "revenue"}}
       {:ok, result} = GrafeoAdapter.discover(expression, @finance_scope, [])
-      assert result.data == []
+
+      # Finance scope agent sees finance revenue entities.
+      assert length(result.data) > 0
+
+      # Every returned row carries source attribution.
+      Enum.each(result.data, fn row ->
+        assert row.source in ["text", "vector", "both"]
+      end)
+
+      # revenue_growth is the strongest hit (appears in both name and
+      # description of that finance entity).
+      assert Enum.any?(result.data, &(&1.name == "revenue_growth"))
+    end
+
+    test "search-based discovery is empty when no visible scope contains matching text" do
+      # From engineering scope no entity mentions "revenue" in name or
+      # description, and vector overlap on a single token is too weak
+      # to surface anything — confirms the scope-first pre-filter.
+      expression = %Cqr.Discover{related_to: {:search, "revenue"}}
+      {:ok, result} = GrafeoAdapter.discover(expression, @engineering_scope, [])
+
+      refute Enum.any?(result.data, fn row ->
+               String.contains?(String.downcase(row.description), "revenue")
+             end)
     end
   end
 
