@@ -5,7 +5,6 @@ defmodule Cqr.EngineTest do
 
   @finance_context %{scope: ["company", "finance"]}
   @engineering_context %{scope: ["company", "engineering"]}
-  @company_context %{scope: ["company"]}
 
   describe "execute/2 — RESOLVE from string" do
     test "resolves entity within scope" do
