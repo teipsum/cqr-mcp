@@ -14,7 +14,7 @@ defmodule Cqr.Engine do
   See PROJECT_KNOWLEDGE.md Section 3.3 for the data flow.
   """
 
-  alias Cqr.Engine.{Assert, Certify, Planner}
+  alias Cqr.Engine.{Assert, Certify, Planner, Refresh, Signal, Trace}
 
   @doc """
   Execute a CQR expression within an agent context.
@@ -108,6 +108,13 @@ defmodule Cqr.Engine do
     narrow_by_requested(requested, agent_visible)
   end
 
+  defp narrow_visible_scopes(%Cqr.Refresh{scope: nil}, agent_visible),
+    do: {:ok, agent_visible}
+
+  defp narrow_visible_scopes(%Cqr.Refresh{scope: requested}, agent_visible) do
+    narrow_by_requested([requested], agent_visible)
+  end
+
   defp narrow_visible_scopes(_ast, agent_visible), do: {:ok, agent_visible}
 
   defp narrow_by_requested(requested_scopes, agent_visible) do
@@ -137,6 +144,18 @@ defmodule Cqr.Engine do
 
   defp dispatch(%Cqr.Assert{} = ast, _scope_context, context) do
     Assert.execute(ast, context)
+  end
+
+  defp dispatch(%Cqr.Trace{} = ast, _scope_context, context) do
+    Trace.execute(ast, context)
+  end
+
+  defp dispatch(%Cqr.Signal{} = ast, _scope_context, context) do
+    Signal.execute(ast, context)
+  end
+
+  defp dispatch(%Cqr.Refresh{} = ast, _scope_context, context) do
+    Refresh.execute(ast, context)
   end
 
   defp dispatch(ast, scope_context, context) do

@@ -8,7 +8,15 @@ defmodule CqrMcp.Tools do
 
   @doc "Return the list of available MCP tools."
   def list do
-    [resolve_tool(), discover_tool(), certify_tool(), assert_tool()]
+    [
+      resolve_tool(),
+      discover_tool(),
+      certify_tool(),
+      assert_tool(),
+      trace_tool(),
+      signal_tool(),
+      refresh_tool()
+    ]
   end
 
   @doc "Execute a tool call by name with the given arguments and agent context."
@@ -36,6 +44,23 @@ defmodule CqrMcp.Tools do
       {:error, error} ->
         {:error, error}
     end
+  end
+
+  def call("cqr_trace", args, context) do
+    expression = build_trace_expression(args)
+    execute_and_format(expression, context)
+  end
+
+  def call("cqr_signal", args, context) do
+    case build_signal_expression(args) do
+      {:ok, expression} -> execute_and_format(expression, context)
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  def call("cqr_refresh", args, context) do
+    expression = build_refresh_expression(args)
+    execute_and_format(expression, context)
   end
 
   def call(name, _args, _context) do
@@ -178,6 +203,94 @@ defmodule CqrMcp.Tools do
           }
         },
         "required" => ["entity", "type", "description", "intent", "derived_from"]
+      }
+    }
+  end
+
+  defp trace_tool do
+    %{
+      "name" => "cqr_trace",
+      "description" =>
+        "Trace the provenance history of an entity: how it came to exist, what changed " <>
+          "it, who acted on it, and what it was derived from. Returns the assertion record, " <>
+          "certification history, signal history, and the derived-from chain.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "entity" => %{
+            "type" => "string",
+            "description" => "Entity to trace (entity:namespace:name)"
+          },
+          "depth" => %{
+            "type" => "integer",
+            "description" =>
+              "Causal chain depth: how many hops to follow through DERIVED_FROM. Default 1.",
+            "default" => 1
+          },
+          "time_window" => %{
+            "type" => "string",
+            "description" =>
+              "Time window to filter events (e.g., '24h', '7d', '30m'). Default: all history."
+          }
+        },
+        "required" => ["entity"]
+      }
+    }
+  end
+
+  defp signal_tool do
+    %{
+      "name" => "cqr_signal",
+      "description" =>
+        "Write a quality or reputation assessment on an entity. Updates the entity's " <>
+          "reputation score and records a SignalRecord for audit traceability. Use this " <>
+          "when an agent observes that an entity's data quality has changed: a pipeline " <>
+          "refreshed (score up), a source went stale (score down), or a validation check " <>
+          "failed (score down).",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "entity" => %{
+            "type" => "string",
+            "description" => "Entity to signal (entity:namespace:name)"
+          },
+          "score" => %{
+            "type" => "number",
+            "description" => "New reputation score (0.0 = unreliable, 1.0 = fully trustworthy)"
+          },
+          "evidence" => %{
+            "type" => "string",
+            "description" => "Rationale for the reputation change"
+          }
+        },
+        "required" => ["entity", "score", "evidence"]
+      }
+    }
+  end
+
+  defp refresh_tool do
+    %{
+      "name" => "cqr_refresh",
+      "description" =>
+        "Check for stale context. Scans all entities visible to the agent and returns " <>
+          "those whose freshness exceeds the threshold. Use this as a periodic health " <>
+          "check to identify context that needs attention. Returns stale items sorted by " <>
+          "staleness (most stale first).",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "threshold" => %{
+            "type" => "string",
+            "description" => "Staleness threshold (e.g., '24h', '7d', '30m'). Default: '24h'.",
+            "default" => "24h"
+          },
+          "scope" => %{
+            "type" => "string",
+            "description" =>
+              "Scope to check (e.g., scope:company:product). Default: agent's full scope."
+          }
+        },
+        "required" => []
       }
     }
   end
@@ -427,6 +540,64 @@ defmodule CqrMcp.Tools do
            "message" => "Invalid relationship '#{entry}': expected REL:entity:ns:name:strength"
          }}
     end
+  end
+
+  defp build_trace_expression(args) do
+    parts = ["TRACE #{args["entity"]}"]
+
+    parts =
+      case args["time_window"] do
+        nil -> parts
+        "" -> parts
+        window when is_binary(window) -> parts ++ ["OVER last #{window}"]
+      end
+
+    parts =
+      case args["depth"] do
+        nil -> parts
+        d when is_integer(d) and d > 0 -> parts ++ ["DEPTH causal:#{d}"]
+        _ -> parts
+      end
+
+    Enum.join(parts, " ")
+  end
+
+  defp build_signal_expression(args) do
+    with {:ok, entity} <- require_string(args, "entity"),
+         {:ok, evidence} <- require_string(args, "evidence"),
+         {:ok, score} <- require_score(args) do
+      parts = [
+        "SIGNAL reputation",
+        "ON #{entity}",
+        "SCORE #{:erlang.float_to_binary(score * 1.0, decimals: 2)}",
+        ~s(EVIDENCE "#{sanitize_quoted(evidence)}")
+      ]
+
+      {:ok, Enum.join(parts, " ")}
+    end
+  end
+
+  defp require_score(args) do
+    case args["score"] do
+      score when is_number(score) -> {:ok, score * 1.0}
+      _ -> {:error, %{"code" => -32_602, "message" => "score must be a number in [0.0, 1.0]"}}
+    end
+  end
+
+  defp build_refresh_expression(args) do
+    threshold = args["threshold"] || "24h"
+
+    parts = ["REFRESH CHECK active_context"]
+
+    parts =
+      case args["scope"] do
+        scope when is_binary(scope) and scope != "" -> parts ++ ["WITHIN #{scope}"]
+        _ -> parts
+      end
+
+    parts = parts ++ ["WHERE age > #{threshold}", "RETURN stale_items"]
+
+    Enum.join(parts, " ")
   end
 
   defp build_certify_expression(args) do
