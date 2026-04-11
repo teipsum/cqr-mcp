@@ -10,10 +10,11 @@ defmodule Cqr.Adapter.Grafeo do
 
   @behaviour Cqr.Adapter.Behaviour
 
+  alias Cqr.Grafeo.Server, as: GrafeoServer
   alias Cqr.Repo.Semantic
 
   @impl true
-  def capabilities, do: [:resolve, :discover]
+  def capabilities, do: [:resolve, :discover, :assert]
 
   @impl true
   def resolve(%Cqr.Resolve{entity: entity} = expression, scope_context, _opts) do
@@ -27,8 +28,7 @@ defmodule Cqr.Adapter.Grafeo do
       {:error, :not_found} ->
         similar = Semantic.search_entities(elem(entity, 1), visible)
 
-        {:error,
-         Cqr.Error.entity_not_found(Cqr.Types.format_entity(entity), similar: similar)}
+        {:error, Cqr.Error.entity_not_found(Cqr.Types.format_entity(entity), similar: similar)}
 
       {:error, :not_visible} ->
         {:error,
@@ -59,9 +59,8 @@ defmodule Cqr.Adapter.Grafeo do
              %Cqr.Error{code: :adapter_error, message: "Grafeo error: #{inspect(reason)}"}}
         end
 
-      {:search, _term} ->
-        # Search-based discovery not yet implemented in V1
-        {:ok, %Cqr.Result{data: [], sources: ["grafeo"]}}
+      {:search, term} ->
+        search_discover(term, visible, expression)
     end
   end
 
@@ -83,6 +82,273 @@ defmodule Cqr.Adapter.Grafeo do
     end
   end
 
+  # --- DISCOVER: free-text multi-paradigm search ---
+  #
+  # Governance-first ordering (patent Section 8.6): a single scope-filtered
+  # Cypher query materializes the candidate set of visible entities with
+  # their stored embeddings, then Elixir computes both BM25-style text
+  # relevance and cosine vector similarity against the query. Results are
+  # merged by entity identity with `source: "text" | "vector" | "both"`
+  # attribution and ranked by combined score.
+  #
+  # The scope IN filter runs inside the MATCH, not in a post-filter, so
+  # no entity outside the agent's visible scope set is ever materialized.
+
+  @vector_top_k 10
+
+  defp search_discover(term, visible, expression) do
+    case fetch_candidates(visible) do
+      {:ok, []} ->
+        {:ok, empty_search_result()}
+
+      {:ok, candidates} ->
+        query_embedding = Cqr.Repo.Seed.pseudo_embedding(term)
+        ranked = rank_candidates(candidates, term, query_embedding)
+        limited = maybe_limit(ranked, expression.limit)
+        {:ok, build_search_result(limited)}
+
+      {:error, reason} ->
+        {:error,
+         %Cqr.Error{
+           code: :adapter_error,
+           message: "Grafeo search error: #{inspect(reason)}"
+         }}
+    end
+  end
+
+  defp fetch_candidates([]), do: {:ok, []}
+
+  defp fetch_candidates(visible_scopes) do
+    scope_list =
+      visible_scopes
+      |> Enum.map(fn segments -> "\"#{Enum.join(segments, ":")}\"" end)
+      |> Enum.join(", ")
+
+    query =
+      "MATCH (e:Entity)-[:IN_SCOPE]->(s:Scope) " <>
+        "WHERE s.path IN [#{scope_list}] " <>
+        "RETURN e.namespace, e.name, e.type, e.description, e.owner, " <>
+        "e.reputation, e.certified, e.embedding, s.path"
+
+    case Cqr.Grafeo.Server.query(query) do
+      {:ok, rows} -> {:ok, dedupe_by_entity(rows)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # An entity with a secondary IN_SCOPE edge (e.g. product:nps in both
+  # product and customer_success) appears once per visible scope path.
+  # Collapse to one row per entity, keeping the first row and the list
+  # of every scope path the entity sits in.
+  defp dedupe_by_entity(rows) do
+    rows
+    |> Enum.group_by(fn row -> {row["e.namespace"], row["e.name"]} end)
+    |> Enum.map(fn {_key, grouped} ->
+      paths = Enum.map(grouped, & &1["s.path"])
+      {hd(grouped), paths}
+    end)
+  end
+
+  # Rank the candidate set by text relevance + vector similarity, merging
+  # by entity identity. Every returned map has a `source` tag.
+  defp rank_candidates(candidates, term, query_embedding) do
+    normalized_term = String.downcase(term)
+
+    scored =
+      Enum.map(candidates, fn {row, paths} ->
+        text_score = text_relevance(row, normalized_term)
+        similarity = vector_similarity(row["e.embedding"], query_embedding)
+
+        %{
+          row: row,
+          scope_paths: paths,
+          text_score: text_score,
+          similarity: similarity
+        }
+      end)
+
+    text_hits = Enum.filter(scored, fn s -> s.text_score > 0 end)
+
+    vector_hits =
+      scored
+      |> Enum.filter(fn s -> is_float(s.similarity) and s.similarity > 0.0 end)
+      |> Enum.sort_by(fn s -> -s.similarity end)
+      |> Enum.take(@vector_top_k)
+
+    merge_modalities(text_hits, vector_hits)
+  end
+
+  # Simple case-insensitive substring count across name + description.
+  # This stands in for BM25 since Grafeo v0.5 exposes no fulltext
+  # procedure. Score = (name hits * 2) + (description hits).
+  defp text_relevance(row, normalized_term) do
+    name = String.downcase(row["e.name"] || "")
+    desc = String.downcase(row["e.description"] || "")
+
+    name_hits = substring_count(name, normalized_term)
+    desc_hits = substring_count(desc, normalized_term)
+
+    name_hits * 2 + desc_hits
+  end
+
+  defp substring_count("", _needle), do: 0
+  defp substring_count(_haystack, ""), do: 0
+
+  defp substring_count(haystack, needle) do
+    haystack
+    |> String.split(needle)
+    |> length()
+    |> Kernel.-(1)
+  end
+
+  defp vector_similarity(nil, _query), do: nil
+  defp vector_similarity([], _query), do: nil
+
+  defp vector_similarity(entity_vec, query_vec)
+       when is_list(entity_vec) and is_list(query_vec) do
+    cosine_similarity(entity_vec, query_vec)
+  end
+
+  defp cosine_similarity(a, b) when length(a) != length(b), do: 0.0
+
+  defp cosine_similarity(a, b) do
+    {dot, mag_a_sq, mag_b_sq} =
+      a
+      |> Enum.zip(b)
+      |> Enum.reduce({0.0, 0.0, 0.0}, fn {x, y}, {d, ma, mb} ->
+        {d + x * y, ma + x * x, mb + y * y}
+      end)
+
+    mag_a = :math.sqrt(mag_a_sq)
+    mag_b = :math.sqrt(mag_b_sq)
+
+    cond do
+      mag_a == 0.0 -> 0.0
+      mag_b == 0.0 -> 0.0
+      true -> dot / (mag_a * mag_b)
+    end
+  end
+
+  # Merge text_hits and vector_hits by entity identity, tagging each
+  # result with the retrieval modality that surfaced it. Results that
+  # appear in both modalities carry source: "both" and keep both scores.
+  # Ranking: results from either modality are ordered by combined score
+  # (text normalized to [0, 1] + similarity).
+  defp merge_modalities(text_hits, vector_hits) do
+    max_text =
+      text_hits
+      |> Enum.map(& &1.text_score)
+      |> Enum.max(fn -> 1 end)
+
+    by_key = %{}
+
+    by_key =
+      Enum.reduce(text_hits, by_key, fn hit, acc ->
+        key = {hit.row["e.namespace"], hit.row["e.name"]}
+        Map.put(acc, key, %{hit: hit, source: "text"})
+      end)
+
+    by_key =
+      Enum.reduce(vector_hits, by_key, fn hit, acc ->
+        key = {hit.row["e.namespace"], hit.row["e.name"]}
+
+        case Map.fetch(acc, key) do
+          {:ok, %{source: "text"}} ->
+            Map.put(acc, key, %{hit: hit, source: "both"})
+
+          _ ->
+            Map.put(acc, key, %{hit: hit, source: "vector"})
+        end
+      end)
+
+    by_key
+    |> Map.values()
+    |> Enum.map(fn %{hit: hit, source: source} ->
+      text_normalized =
+        case max_text do
+          0 -> 0.0
+          m -> hit.text_score / m
+        end
+
+      combined = text_normalized + (hit.similarity || 0.0)
+      build_search_row(hit, source, combined)
+    end)
+    |> Enum.sort_by(fn m -> -m.combined_score end)
+  end
+
+  defp build_search_row(hit, source, combined) do
+    row = hit.row
+
+    %{
+      entity: {row["e.namespace"], row["e.name"]},
+      namespace: row["e.namespace"],
+      name: row["e.name"],
+      type: row["e.type"],
+      description: row["e.description"],
+      owner: row["e.owner"],
+      reputation: row["e.reputation"],
+      certified: row["e.certified"],
+      scopes: Enum.map(hit.scope_paths, fn path -> String.split(path, ":") end),
+      source: source,
+      text_score: hit.text_score,
+      similarity: hit.similarity,
+      combined_score: combined
+    }
+  end
+
+  defp maybe_limit(results, nil), do: results
+  defp maybe_limit(results, n) when is_integer(n) and n > 0, do: Enum.take(results, n)
+  defp maybe_limit(results, _), do: results
+
+  defp empty_search_result do
+    %Cqr.Result{data: [], sources: ["grafeo"], quality: %Cqr.Quality{}}
+  end
+
+  defp build_search_result([]), do: empty_search_result()
+
+  defp build_search_result(ranked) do
+    top = hd(ranked)
+
+    %Cqr.Result{
+      data: ranked,
+      sources: ["grafeo"],
+      quality: %Cqr.Quality{
+        reputation: top[:reputation],
+        owner: top[:owner],
+        provenance: "DISCOVER multi-paradigm search (graph + text + vector)"
+      }
+    }
+  end
+
+  @impl true
+  def assert(%Cqr.Assert{} = expression, scope_context, opts) do
+    visible = scope_context[:visible_scopes] || []
+    agent_id = Keyword.get(opts, :agent_id, "anonymous")
+    relationships = Keyword.get(opts, :relationships, [])
+
+    with {:ok, target_scope} <- resolve_target_scope(expression, visible),
+         :ok <- ensure_entity_absent(expression.entity),
+         :ok <- ensure_derived_from_accessible(expression.derived_from, visible),
+         :ok <- ensure_relationship_targets_accessible(relationships, visible),
+         {:ok, record_id} <- generate_record_id(),
+         :ok <- write_entity_node(expression, agent_id),
+         :ok <- write_in_scope_edge(expression.entity, target_scope),
+         :ok <- write_derived_from_edges(expression, agent_id),
+         :ok <- write_relationship_edges(expression.entity, relationships),
+         :ok <- write_assertion_record(expression, agent_id, record_id, target_scope),
+         :ok <- write_asserted_by_edge(expression.entity, record_id) do
+      result = build_result(expression, agent_id, target_scope)
+      {:ok, result}
+    else
+      {:error, %Cqr.Error{} = err} ->
+        # Best-effort cleanup if a write failed partway. Validation errors
+        # fire before any writes so the rollback path only triggers on
+        # adapter system errors.
+        cleanup_partial_assert(expression.entity)
+        {:error, err}
+    end
+  end
+
   @impl true
   def normalize(raw_results, _metadata) do
     %Cqr.Result{
@@ -99,6 +365,327 @@ defmodule Cqr.Adapter.Grafeo do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # --- ASSERT: validation helpers ---
+
+  defp resolve_target_scope(%Cqr.Assert{scope: nil}, [agent_self | _] = _visible) do
+    # Default target scope: the first scope in the agent's visibility set,
+    # which is the agent's own active scope (see Cqr.Repo.ScopeTree.visible_scopes/1).
+    {:ok, agent_self}
+  end
+
+  defp resolve_target_scope(%Cqr.Assert{scope: nil}, []) do
+    {:error,
+     %Cqr.Error{
+       code: :scope_access,
+       message: "No active scope for the agent; cannot determine target scope for ASSERT"
+     }}
+  end
+
+  defp resolve_target_scope(%Cqr.Assert{scope: target}, visible) do
+    if target in visible do
+      {:ok, target}
+    else
+      {:error,
+       Cqr.Error.scope_access(Cqr.Types.format_scope(target),
+         suggestions: Enum.map(visible, &Cqr.Types.format_scope/1)
+       )}
+    end
+  end
+
+  defp ensure_entity_absent({ns, name} = entity) do
+    if Semantic.entity_exists?(entity) do
+      formatted = Cqr.Types.format_entity(entity)
+
+      {:error,
+       %Cqr.Error{
+         code: :entity_exists,
+         message:
+           "Entity #{formatted} already exists. Use CERTIFY to update governance " <>
+             "status or SIGNAL to update quality.",
+         details: %{namespace: ns, name: name},
+         retry_guidance:
+           "Choose a different entity name, or use CERTIFY/SIGNAL on the existing entity."
+       }}
+    else
+      :ok
+    end
+  end
+
+  defp ensure_derived_from_accessible(nil, _visible) do
+    {:error,
+     %Cqr.Error{
+       code: :missing_required_field,
+       message: "ASSERT requires DERIVED_FROM with at least one source entity",
+       retry_guidance:
+         "Add a DERIVED_FROM clause listing the entities this assertion was derived from"
+     }}
+  end
+
+  defp ensure_derived_from_accessible([], _visible) do
+    {:error,
+     %Cqr.Error{
+       code: :missing_required_field,
+       message: "ASSERT requires at least one entity in DERIVED_FROM",
+       retry_guidance:
+         "Add a DERIVED_FROM clause listing the entities this assertion was derived from"
+     }}
+  end
+
+  defp ensure_derived_from_accessible(entities, visible) when is_list(entities) do
+    missing =
+      Enum.filter(entities, fn entity ->
+        case Semantic.get_entity(entity, visible) do
+          {:ok, _} -> false
+          _ -> true
+        end
+      end)
+
+    case missing do
+      [] ->
+        :ok
+
+      _ ->
+        formatted = Enum.map(missing, &Cqr.Types.format_entity/1)
+
+        {:error,
+         %Cqr.Error{
+           code: :entity_not_found,
+           message:
+             "ASSERT failed: derived_from entities not found or not accessible: " <>
+               Enum.join(formatted, ", "),
+           similar_entities: formatted,
+           retry_guidance:
+             "Verify each DERIVED_FROM entity exists in a scope visible to this agent"
+         }}
+    end
+  end
+
+  defp ensure_relationship_targets_accessible([], _visible), do: :ok
+
+  defp ensure_relationship_targets_accessible(relationships, visible) do
+    missing =
+      Enum.filter(relationships, fn %{target: target} ->
+        case Semantic.get_entity(target, visible) do
+          {:ok, _} -> false
+          _ -> true
+        end
+      end)
+
+    case missing do
+      [] ->
+        :ok
+
+      _ ->
+        formatted = Enum.map(missing, fn %{target: t} -> Cqr.Types.format_entity(t) end)
+
+        {:error,
+         %Cqr.Error{
+           code: :entity_not_found,
+           message:
+             "ASSERT failed: relationship target entities not found or not accessible: " <>
+               Enum.join(formatted, ", "),
+           similar_entities: formatted,
+           retry_guidance:
+             "Verify each relationship target entity exists in a scope visible to this agent"
+         }}
+    end
+  end
+
+  # --- ASSERT: write helpers ---
+
+  # RFC 4122 UUIDv4. Used to give each AssertionRecord a stable identity
+  # so the ASSERTED_BY edge can MATCH it unambiguously.
+  defp generate_record_id do
+    <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)
+    c = Bitwise.bor(Bitwise.band(c, 0x0FFF), 0x4000)
+    d = Bitwise.bor(Bitwise.band(d, 0x3FFF), 0x8000)
+
+    uuid =
+      :io_lib.format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b", [a, b, c, d, e])
+      |> IO.iodata_to_binary()
+
+    {:ok, uuid}
+  end
+
+  defp write_entity_node(%Cqr.Assert{entity: {ns, name}} = expression, agent_id) do
+    confidence = expression.confidence || 0.5
+    reputation = 0.5
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    query =
+      "INSERT (:Entity {" <>
+        "namespace: '#{ns}', name: '#{name}', " <>
+        "type: '#{escape(expression.type)}', " <>
+        "description: '#{escape(expression.description)}', " <>
+        "certified: false, " <>
+        "confidence: #{confidence}, " <>
+        "asserted_by: '#{escape(agent_id)}', " <>
+        "asserted_at: '#{now}', " <>
+        "intent: '#{escape(expression.intent)}', " <>
+        "owner: '#{escape(agent_id)}', " <>
+        "reputation: #{reputation}, " <>
+        "freshness_hours_ago: 0" <>
+        "})"
+
+    exec_write(query)
+  end
+
+  defp write_in_scope_edge({ns, name}, scope_segments) do
+    scope_path = Enum.join(scope_segments, ":")
+
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}), " <>
+        "(s:Scope {path: '#{scope_path}'}) " <>
+        "INSERT (e)-[:IN_SCOPE {primary: true}]->(s)"
+
+    exec_write(query)
+  end
+
+  defp write_derived_from_edges(%Cqr.Assert{entity: {ns, name}} = expression, agent_id) do
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    Enum.reduce_while(expression.derived_from, :ok, fn {src_ns, src_name}, _ ->
+      query =
+        "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}), " <>
+          "(src:Entity {namespace: '#{src_ns}', name: '#{src_name}'}) " <>
+          "INSERT (e)-[:DERIVED_FROM {asserted_by: '#{escape(agent_id)}', " <>
+          "asserted_at: '#{now}'}]->(src)"
+
+      case exec_write(query) do
+        :ok -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp write_relationship_edges(_entity, []), do: :ok
+
+  defp write_relationship_edges({ns, name}, relationships) do
+    Enum.reduce_while(relationships, :ok, fn
+      %{type: rel_type, target: {tgt_ns, tgt_name}, strength: strength}, _ ->
+        query =
+          "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}), " <>
+            "(t:Entity {namespace: '#{tgt_ns}', name: '#{tgt_name}'}) " <>
+            "INSERT (e)-[:#{rel_type} {strength: #{strength}, asserted: true}]->(t)"
+
+        case exec_write(query) do
+          :ok -> {:cont, :ok}
+          {:error, _} = err -> {:halt, err}
+        end
+    end)
+  end
+
+  defp write_assertion_record(
+         %Cqr.Assert{entity: {ns, name}} = expression,
+         agent_id,
+         record_id,
+         target_scope
+       ) do
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+    confidence = expression.confidence || 0.5
+
+    derived_from_str =
+      expression.derived_from
+      |> Enum.map(&Cqr.Types.format_entity/1)
+      |> Enum.join(",")
+
+    expression_text =
+      "ASSERT #{Cqr.Types.format_entity(expression.entity)} " <>
+        "TYPE #{expression.type} " <>
+        "DESCRIPTION \"#{expression.description}\" " <>
+        "INTENT \"#{expression.intent}\" " <>
+        "DERIVED_FROM #{derived_from_str} " <>
+        "IN #{Cqr.Types.format_scope(target_scope)} " <>
+        "CONFIDENCE #{confidence}"
+
+    query =
+      "INSERT (:AssertionRecord {" <>
+        "record_id: '#{record_id}', " <>
+        "entity_namespace: '#{ns}', entity_name: '#{name}', " <>
+        "agent_id: '#{escape(agent_id)}', " <>
+        "timestamp: '#{now}', " <>
+        "intent: '#{escape(expression.intent)}', " <>
+        "confidence: #{confidence}, " <>
+        "derived_from: '#{escape(derived_from_str)}', " <>
+        "expression_text: '#{escape(expression_text)}'" <>
+        "})"
+
+    exec_write(query)
+  end
+
+  defp write_asserted_by_edge({ns, name}, record_id) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}), " <>
+        "(r:AssertionRecord {record_id: '#{record_id}'}) " <>
+        "INSERT (e)-[:ASSERTED_BY]->(r)"
+
+    exec_write(query)
+  end
+
+  defp build_result(%Cqr.Assert{entity: {ns, name}} = expression, agent_id, target_scope) do
+    now = DateTime.utc_now()
+    confidence = expression.confidence || 0.5
+
+    entity_data = %{
+      namespace: ns,
+      name: name,
+      type: expression.type,
+      description: expression.description,
+      certified: false,
+      confidence: confidence,
+      asserted_by: agent_id,
+      asserted_at: now,
+      intent: expression.intent,
+      derived_from: Enum.map(expression.derived_from, &Cqr.Types.format_entity/1),
+      scopes: [target_scope],
+      reputation: 0.5,
+      owner: agent_id
+    }
+
+    %Cqr.Result{
+      data: [entity_data],
+      sources: ["grafeo"],
+      quality: %Cqr.Quality{
+        freshness: now,
+        confidence: confidence,
+        reputation: 0.5,
+        owner: agent_id,
+        provenance: "ASSERT operation by #{agent_id}",
+        certified_by: nil,
+        certified_at: nil
+      }
+    }
+  end
+
+  # Best-effort cleanup if a write step failed after the entity node was
+  # created. Without explicit transaction primitives in the NIF, this is
+  # the closest we can get to rollback. Validation errors fire before any
+  # writes, so this path only triggers on adapter system errors.
+  defp cleanup_partial_assert({ns, name}) do
+    cleanup_queries = [
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})-[r]-() DELETE r",
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}) DELETE e",
+      "MATCH (r:AssertionRecord {entity_namespace: '#{ns}', entity_name: '#{name}'}) DELETE r"
+    ]
+
+    Enum.each(cleanup_queries, fn q -> GrafeoServer.query(q) end)
+  end
+
+  defp exec_write(query) do
+    case GrafeoServer.query(query) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         %Cqr.Error{code: :adapter_error, message: "Grafeo write failed: #{inspect(reason)}"}}
+    end
+  end
+
+  defp escape(nil), do: ""
+  defp escape(str) when is_binary(str), do: String.replace(str, "'", "\\'")
+  defp escape(other), do: to_string(other)
 
   # --- Private ---
 
