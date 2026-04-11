@@ -88,7 +88,7 @@ defmodule CqrMcp.Handler do
   end
 
   defp handle_method("tools/call", _params) do
-    {:error, %{"code" => -32602, "message" => "Missing required params: name, arguments"}}
+    {:error, %{"code" => -32_602, "message" => "Missing required params: name, arguments"}}
   end
 
   # --- Resources ---
@@ -112,12 +112,12 @@ defmodule CqrMcp.Handler do
          }}
 
       {:error, reason} ->
-        {:error, %{"code" => -32002, "message" => "Resource not found: #{reason}"}}
+        {:error, %{"code" => -32_002, "message" => "Resource not found: #{reason}"}}
     end
   end
 
   defp handle_method("resources/read", _params) do
-    {:error, %{"code" => -32602, "message" => "Missing required param: uri"}}
+    {:error, %{"code" => -32_602, "message" => "Missing required param: uri"}}
   end
 
   # --- Ping ---
@@ -127,7 +127,7 @@ defmodule CqrMcp.Handler do
   # --- Unknown ---
 
   defp handle_method(method, _params) do
-    {:error, %{"code" => -32601, "message" => "Method not found: #{method}"}}
+    {:error, %{"code" => -32_601, "message" => "Method not found: #{method}"}}
   end
 
   # --- Agent context ---

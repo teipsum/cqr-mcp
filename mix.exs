@@ -1,14 +1,21 @@
 defmodule CqrMcp.MixProject do
   use Mix.Project
 
+  @version "0.2.0"
+  @source_url "https://github.com/teipsum/cqr-mcp"
+
   def project do
     [
       app: :cqr_mcp,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      docs: [main: "readme", extras: ["README.md"]]
+      description: description(),
+      package: package(),
+      docs: docs(),
+      name: "CQR MCP",
+      source_url: @source_url
     ]
   end
 
@@ -36,7 +43,42 @@ defmodule CqrMcp.MixProject do
       {:plug, "~> 1.16"},
       {:bandit, "~> 1.6"},
       # Documentation
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      # Static analysis
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+    ]
+  end
+
+  defp description do
+    "Governed context resolution for AI agents — CQR protocol as an MCP server."
+  end
+
+  defp package do
+    [
+      name: "cqr_mcp",
+      licenses: ["BUSL-1.1"],
+      links: %{
+        "GitHub" => @source_url
+      },
+      files: ~w(lib native/cqr_grafeo/src native/cqr_grafeo/Cargo.toml
+           mix.exs README.md LICENSE CONTRIBUTING.md .formatter.exs)
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      source_ref: "v#{@version}",
+      source_url: @source_url,
+      extras: [
+        "README.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "docs/architecture.md",
+        "docs/cqr-primer.md",
+        "docs/cqr-protocol-specification.md",
+        "docs/mcp-integration.md"
+      ]
     ]
   end
 end

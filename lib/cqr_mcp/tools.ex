@@ -39,7 +39,7 @@ defmodule CqrMcp.Tools do
   end
 
   def call(name, _args, _context) do
-    {:error, %{"code" => -32601, "message" => "Unknown tool: #{name}"}}
+    {:error, %{"code" => -32_601, "message" => "Unknown tool: #{name}"}}
   end
 
   # --- Tool definitions ---
@@ -257,8 +257,7 @@ defmodule CqrMcp.Tools do
         scopes =
           args["scope"]
           |> String.split(",")
-          |> Enum.map(&String.trim/1)
-          |> Enum.join(", ")
+          |> Enum.map_join(", ", &String.trim/1)
 
         parts ++ ["WITHIN #{scopes}"]
       else
@@ -324,7 +323,7 @@ defmodule CqrMcp.Tools do
       _ ->
         {:error,
          %{
-           "code" => -32602,
+           "code" => -32_602,
            "message" => "Missing or invalid required field: #{key}"
          }}
     end
@@ -350,7 +349,7 @@ defmodule CqrMcp.Tools do
 
     cond do
       refs == [] ->
-        {:error, %{"code" => -32602, "message" => "derived_from must list at least one entity"}}
+        {:error, %{"code" => -32_602, "message" => "derived_from must list at least one entity"}}
 
       Enum.all?(refs, &String.starts_with?(&1, "entity:")) ->
         {:ok, refs}
@@ -360,7 +359,7 @@ defmodule CqrMcp.Tools do
 
         {:error,
          %{
-           "code" => -32602,
+           "code" => -32_602,
            "message" =>
              "derived_from entries must be in entity:namespace:name form. Invalid: " <>
                Enum.join(bad, ", ")
@@ -406,7 +405,7 @@ defmodule CqrMcp.Tools do
           false ->
             {:error,
              %{
-               "code" => -32602,
+               "code" => -32_602,
                "message" =>
                  "Invalid relationship '#{entry}': type must be one of " <>
                    Enum.join(@valid_relationship_types, ", ") <>
@@ -416,7 +415,7 @@ defmodule CqrMcp.Tools do
           _ ->
             {:error,
              %{
-               "code" => -32602,
+               "code" => -32_602,
                "message" => "Invalid relationship '#{entry}': strength must be a decimal"
              }}
         end
@@ -424,7 +423,7 @@ defmodule CqrMcp.Tools do
       _ ->
         {:error,
          %{
-           "code" => -32602,
+           "code" => -32_602,
            "message" => "Invalid relationship '#{entry}': expected REL:entity:ns:name:strength"
          }}
     end
@@ -517,10 +516,10 @@ defmodule CqrMcp.Tools do
   defp format_value(atom) when is_atom(atom) and atom != nil, do: to_string(atom)
   defp format_value(v), do: v
 
-  defp error_code_to_int(:parse_error), do: -32700
-  defp error_code_to_int(:entity_not_found), do: -32001
-  defp error_code_to_int(:scope_access), do: -32002
-  defp error_code_to_int(:invalid_transition), do: -32003
-  defp error_code_to_int(:no_adapter), do: -32004
-  defp error_code_to_int(_), do: -32000
+  defp error_code_to_int(:parse_error), do: -32_700
+  defp error_code_to_int(:entity_not_found), do: -32_001
+  defp error_code_to_int(:scope_access), do: -32_002
+  defp error_code_to_int(:invalid_transition), do: -32_003
+  defp error_code_to_int(:no_adapter), do: -32_004
+  defp error_code_to_int(_), do: -32_000
 end

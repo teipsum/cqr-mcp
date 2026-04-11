@@ -1,8 +1,8 @@
 defmodule Cqr.Integration.ScopeTest do
   use ExUnit.Case
 
-  alias Cqr.Scope
   alias Cqr.Repo.ScopeTree
+  alias Cqr.Scope
 
   describe "scope tree" do
     test "all scopes loaded from seed data" do

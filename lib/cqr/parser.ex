@@ -18,7 +18,7 @@ defmodule Cqr.Parser do
 
   import NimbleParsec
 
-  alias Cqr.Parser.{Resolve, Discover, Certify, Assert}
+  alias Cqr.Parser.{Assert, Certify, Discover, Resolve}
 
   defparsec(
     :parse_expression,
