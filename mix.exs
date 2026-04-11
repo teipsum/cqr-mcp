@@ -21,8 +21,13 @@ defmodule CqrMcp.MixProject do
 
   defp deps do
     [
-      # NIF bridge — Rust-to-Elixir
-      {:rustler, "~> 0.34"},
+      # NIF bridge — Rust-to-Elixir.
+      # `rustler_precompiled` downloads prebuilt NIF binaries from GitHub
+      # releases so end users do not need a Rust toolchain. `rustler` is
+      # kept as an optional dep so contributors can rebuild from source
+      # with `CQR_BUILD_NIF=true mix compile`.
+      {:rustler_precompiled, "~> 0.8"},
+      {:rustler, "~> 0.34", optional: true},
       # Parser combinators
       {:nimble_parsec, "~> 1.4"},
       # JSON encoding/decoding

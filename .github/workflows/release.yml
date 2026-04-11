@@ -1,27 +1,19 @@
 # Release workflow — precompiled NIF binaries.
 #
-# This is a STUB. It will be fleshed out once the project adopts
-# `rustler_precompiled` so that consumers of `cqr_mcp` (and anyone
-# who depends on the `cqr_grafeo` NIF) do not need a Rust toolchain
-# at install time.
+# Triggered on tag push matching `v*` (e.g. `v0.1.0`). Cross-compiles the
+# `cqr_grafeo` NIF for every supported target, attaches the resulting
+# tarballs and SHA256 checksums to the GitHub release. `rustler_precompiled`
+# on the client side fetches the matching binary from the release URL at
+# `mix deps.get` time, so downstream users do not need a Rust toolchain.
 #
-# Trigger: on tag push matching `v*` (e.g. `v0.1.0`).
-#
-# Targets for precompiled NIF binaries:
-#   - aarch64-apple-darwin       (macOS ARM — M1/M2/M3/M4/M5)
+# Matrix targets (keep in sync with `lib/grafeo/native.ex :: targets`):
+#   - aarch64-apple-darwin       (macOS ARM  — M1/M2/M3/M4)
 #   - x86_64-apple-darwin        (macOS Intel)
 #   - x86_64-unknown-linux-gnu   (Linux x86_64)
-#   - aarch64-unknown-linux-gnu  (Linux ARM64)
+#   - aarch64-unknown-linux-gnu  (Linux ARM64, cross-compiled)
 #
-# Implementation notes when wiring this up:
-#   - Use `philss/rustler-precompiled-action` to cross-compile and
-#     attach artifacts to a GitHub release.
-#   - The macOS targets require macos-13 (Intel) and macos-14 (ARM)
-#     runners respectively.
-#   - The aarch64 Linux target cross-compiles from ubuntu-latest via
-#     cross-rs or a cargo-zigbuild toolchain.
-#   - Checksums (.tar.gz.sha256) must be published alongside each
-#     artifact so `rustler_precompiled` can verify them.
+# Implementation follows the Explorer / Tokenizers pattern:
+# https://github.com/elixir-explorer/explorer/blob/main/.github/workflows/precompile.yml
 
 name: Release
 
@@ -31,9 +23,52 @@ on:
       - "v*"
 
 jobs:
-  noop:
-    name: stub
-    runs-on: ubuntu-latest
+  build_release:
+    name: NIF ${{ matrix.nif }} - ${{ matrix.job.target }} (${{ matrix.job.os }})
+    runs-on: ${{ matrix.job.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep this list aligned with the `nif_versions` in
+        # `lib/grafeo/native.ex`. NIF 2.16 covers OTP 24+.
+        nif: ["2.16"]
+        job:
+          - { target: aarch64-apple-darwin,      os: macos-14 }
+          - { target: x86_64-apple-darwin,       os: macos-13 }
+          - { target: x86_64-unknown-linux-gnu,  os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, use-cross: true }
+
     steps:
-      - name: Placeholder
-        run: echo "Release workflow not yet implemented — see comments at top of this file."
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract project version
+        shell: bash
+        run: |
+          echo "PROJECT_VERSION=$(sed -n 's/^      version: "\(.*\)",/\1/p' mix.exs | head -n1)" >> "$GITHUB_ENV"
+
+      - name: Build the NIF
+        id: build-crate
+        uses: philss/rustler-precompiled-action@v1.1.4
+        with:
+          project-name: cqr_grafeo
+          project-version: ${{ env.PROJECT_VERSION }}
+          target: ${{ matrix.job.target }}
+          nif-version: ${{ matrix.nif }}
+          use-cross: ${{ matrix.job.use-cross }}
+          project-dir: "native/cqr_grafeo"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build-crate.outputs.file-name }}
+          path: ${{ steps.build-crate.outputs.file-path }}
+
+      - name: Publish to GitHub release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            ${{ steps.build-crate.outputs.file-path }}
