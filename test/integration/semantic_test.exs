@@ -1,6 +1,8 @@
 defmodule Cqr.Integration.SemanticTest do
   use ExUnit.Case
 
+  alias Cqr.Grafeo.Native
+  alias Cqr.Repo.Seed
   alias Cqr.Repo.Semantic
 
   describe "entity_exists?/1" do
@@ -72,7 +74,7 @@ defmodule Cqr.Integration.SemanticTest do
   describe "related_entities/3" do
     test "churn_rate has related entities" do
       {:ok, related} = Semantic.related_entities({"product", "churn_rate"})
-      assert length(related) > 0
+      assert [_ | _] = related
 
       rel_entities = Enum.map(related, & &1.entity)
       assert {"product", "nps"} in rel_entities or {"finance", "arr"} in rel_entities
@@ -108,13 +110,13 @@ defmodule Cqr.Integration.SemanticTest do
   describe "seeder idempotency" do
     test "seeding a second time is a no-op" do
       # The app already seeded on startup. Calling again should skip.
-      assert :ok = Cqr.Repo.Seed.seed_if_empty_direct(get_db_handle())
+      assert :ok = Seed.seed_if_empty_direct(get_db_handle())
     end
   end
 
   defp get_db_handle do
     # Access the db handle from the GenServer state for direct NIF calls
-    {:ok, db} = Cqr.Grafeo.Native.new(:memory)
+    {:ok, db} = Native.new(:memory)
     db
   end
 end

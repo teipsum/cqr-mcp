@@ -8,6 +8,8 @@ defmodule Cqr.Repo.Seed do
   See PROJECT_KNOWLEDGE.md Section 10 for the dataset specification.
   """
 
+  alias Cqr.Grafeo.Native
+
   require Logger
 
   @doc """
@@ -15,7 +17,7 @@ defmodule Cqr.Repo.Seed do
   Called during Grafeo.Server init (before GenServer is registered).
   """
   def seed_if_empty_direct(db) do
-    case Cqr.Grafeo.Native.execute(db, "MATCH (n:Scope) RETURN count(n)") do
+    case Native.execute(db, "MATCH (n:Scope) RETURN count(n)") do
       {:ok, [%{"countnonnull(...)" => 0}]} ->
         Logger.info("Empty database detected — seeding sample dataset")
         seed_direct(db)
@@ -280,7 +282,7 @@ defmodule Cqr.Repo.Seed do
   # --- Helpers ---
 
   defp q!(db, query) do
-    case Cqr.Grafeo.Native.execute(db, query) do
+    case Native.execute(db, query) do
       {:ok, _} -> :ok
       {:error, reason} -> raise "Seed query failed: #{reason}\nQuery: #{query}"
     end

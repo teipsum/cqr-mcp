@@ -9,6 +9,11 @@ defmodule CqrMcp.Resources do
   - `cqr://system_prompt` — Agent generation contract
   """
 
+  alias Cqr.Repo.ScopeTree
+  alias Cqr.Repo.Semantic
+  alias Cqr.Scope
+  alias Cqr.Types
+
   @doc "Return the list of available MCP resources."
   def list do
     [
@@ -65,8 +70,8 @@ defmodule CqrMcp.Resources do
 
     visible =
       agent_scope_segments
-      |> Cqr.Repo.ScopeTree.visible_scopes()
-      |> Enum.map(&Cqr.Types.format_scope/1)
+      |> ScopeTree.visible_scopes()
+      |> Enum.map(&Types.format_scope/1)
 
     boot_unix = :persistent_term.get({CqrMcp.Application, :boot_unix})
     boot_iso = :persistent_term.get({CqrMcp.Application, :boot_iso})
@@ -74,7 +79,7 @@ defmodule CqrMcp.Resources do
 
     %{
       "agent_id" => agent_id,
-      "agent_scope" => Cqr.Types.format_scope(agent_scope_segments),
+      "agent_scope" => Types.format_scope(agent_scope_segments),
       "visible_scopes" => visible,
       "permissions" => ["resolve", "discover", "certify"],
       "connected_adapters" => ["grafeo"],
@@ -105,18 +110,19 @@ defmodule CqrMcp.Resources do
   # --- Scopes ---
 
   defp read_scopes do
-    scopes = Cqr.Scope.all_scopes()
+    scopes = Scope.all_scopes()
 
     %{
       "hierarchy" =>
         Enum.map(scopes, fn segments ->
           %{
-            "path" => Cqr.Types.format_scope(segments),
+            "path" => Types.format_scope(segments),
             "name" => List.last(segments),
             "level" => length(segments) - 1,
             "children" =>
-              Cqr.Repo.ScopeTree.children(segments)
-              |> Enum.map(fn c -> Cqr.Types.format_scope(c) end)
+              segments
+              |> ScopeTree.children()
+              |> Enum.map(&Types.format_scope/1)
           }
         end)
     }
@@ -125,30 +131,41 @@ defmodule CqrMcp.Resources do
   # --- Entities ---
 
   defp read_entities do
-    scopes = Cqr.Scope.all_scopes()
-
     entities =
-      Enum.flat_map(scopes, fn scope ->
-        case Cqr.Repo.Semantic.entities_in_scope(scope) do
-          {:ok, ents} ->
-            Enum.map(ents, fn e ->
-              %{
-                "entity" => "entity:#{e.namespace}:#{e.name}",
-                "type" => e.type,
-                "description" => e.description,
-                "scope" => Cqr.Types.format_scope(scope),
-                "owner" => e.owner,
-                "reputation" => e.reputation
-              }
-            end)
-
-          _ ->
-            []
-        end
-      end)
+      Scope.all_scopes()
+      |> Enum.flat_map(&entities_for_scope/1)
       |> Enum.uniq_by(fn e -> e["entity"] end)
 
     %{"entities" => entities, "count" => length(entities)}
+  end
+
+  defp entities_for_scope(scope) do
+    case Semantic.entities_in_scope(scope) do
+      {:ok, ents} -> Enum.map(ents, &format_entity_json(&1, scope))
+      _ -> []
+    end
+  end
+
+  defp format_entity_json(e, scope) do
+    %{
+      "entity" => "entity:#{e.namespace}:#{e.name}",
+      "type" => e.type,
+      "description" => e.description,
+      "scope" => Types.format_scope(scope),
+      "owner" => e.owner,
+      "reputation" => e.reputation
+    }
+  end
+
+  defp entity_lines_for_scope(scope) do
+    case Semantic.entities_in_scope(scope) do
+      {:ok, ents} -> Enum.map(ents, &format_entity_line(&1, scope))
+      _ -> []
+    end
+  end
+
+  defp format_entity_line(e, scope) do
+    "  #{e.namespace}:#{e.name} (#{e.type}) -- #{e.description} [#{Types.format_scope(scope)}]"
   end
 
   # --- Policies ---
@@ -176,26 +193,17 @@ defmodule CqrMcp.Resources do
   # --- System Prompt ---
 
   defp read_system_prompt do
-    scopes = Cqr.Scope.all_scopes()
+    scopes = Scope.all_scopes()
 
     entities =
-      Enum.flat_map(scopes, fn scope ->
-        case Cqr.Repo.Semantic.entities_in_scope(scope) do
-          {:ok, ents} ->
-            Enum.map(ents, fn e ->
-              "  #{e.namespace}:#{e.name} (#{e.type}) -- #{e.description} [#{Cqr.Types.format_scope(scope)}]"
-            end)
-
-          _ ->
-            []
-        end
-      end)
+      scopes
+      |> Enum.flat_map(&entity_lines_for_scope/1)
       |> Enum.uniq()
 
     scope_tree =
       Enum.map(scopes, fn segments ->
         indent = String.duplicate("  ", length(segments) - 1)
-        "#{indent}#{Cqr.Types.format_scope(segments)}"
+        "#{indent}#{Types.format_scope(segments)}"
       end)
 
     """

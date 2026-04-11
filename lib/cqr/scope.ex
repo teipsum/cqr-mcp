@@ -18,6 +18,7 @@ defmodule Cqr.Scope do
   See PROJECT_KNOWLEDGE.md Section 7.
   """
 
+  alias Cqr.Grafeo.Server, as: GrafeoServer
   alias Cqr.Repo.ScopeTree
 
   @doc """
@@ -46,21 +47,17 @@ defmodule Cqr.Scope do
     {ns, name} = entity
     visible = visible_scopes(agent_scope)
 
-    case Cqr.Grafeo.Server.query(
-           "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>
-             "-[:IN_SCOPE]->(s:Scope) RETURN s.path"
-         ) do
-      {:ok, rows} ->
-        entity_scopes = Enum.map(rows, fn r -> String.split(r["s.path"], ":") end)
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>
+        "-[:IN_SCOPE]->(s:Scope) RETURN s.path"
 
-        # Find the first entity scope that's visible to the agent
-        case Enum.find(entity_scopes, fn s -> s in visible end) do
-          nil -> {:error, :not_visible}
-          scope -> {:ok, scope}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, rows} <- GrafeoServer.query(query),
+         entity_scopes = Enum.map(rows, fn r -> String.split(r["s.path"], ":") end),
+         scope when not is_nil(scope) <- Enum.find(entity_scopes, fn s -> s in visible end) do
+      {:ok, scope}
+    else
+      nil -> {:error, :not_visible}
+      {:error, reason} -> {:error, reason}
     end
   end
 

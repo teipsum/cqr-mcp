@@ -152,7 +152,7 @@ defmodule Cqr.TypesTest do
     end
 
     test "weeks to minutes" do
-      assert Types.to_minutes({1, :w}) == 10080
+      assert Types.to_minutes({1, :w}) == 10_080
     end
   end
 

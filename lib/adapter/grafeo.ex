@@ -11,6 +11,7 @@ defmodule Cqr.Adapter.Grafeo do
   @behaviour Cqr.Adapter.Behaviour
 
   alias Cqr.Grafeo.Server, as: GrafeoServer
+  alias Cqr.Repo.Seed
   alias Cqr.Repo.Semantic
 
   @impl true
@@ -102,7 +103,7 @@ defmodule Cqr.Adapter.Grafeo do
         {:ok, empty_search_result()}
 
       {:ok, candidates} ->
-        query_embedding = Cqr.Repo.Seed.pseudo_embedding(term)
+        query_embedding = Seed.pseudo_embedding(term)
         ranked = rank_candidates(candidates, term, query_embedding)
         limited = maybe_limit(ranked, expression.limit)
         {:ok, build_search_result(limited)}
@@ -120,9 +121,7 @@ defmodule Cqr.Adapter.Grafeo do
 
   defp fetch_candidates(visible_scopes) do
     scope_list =
-      visible_scopes
-      |> Enum.map(fn segments -> "\"#{Enum.join(segments, ":")}\"" end)
-      |> Enum.join(", ")
+      Enum.map_join(visible_scopes, ", ", fn segments -> "\"#{Enum.join(segments, ":")}\"" end)
 
     query =
       "MATCH (e:Entity)-[:IN_SCOPE]->(s:Scope) " <>
@@ -130,7 +129,7 @@ defmodule Cqr.Adapter.Grafeo do
         "RETURN e.namespace, e.name, e.type, e.description, e.owner, " <>
         "e.reputation, e.certified, e.embedding, s.path"
 
-    case Cqr.Grafeo.Server.query(query) do
+    case GrafeoServer.query(query) do
       {:ok, rows} -> {:ok, dedupe_by_entity(rows)}
       {:error, reason} -> {:error, reason}
     end
@@ -360,7 +359,7 @@ defmodule Cqr.Adapter.Grafeo do
 
   @impl true
   def health_check do
-    case Cqr.Grafeo.Server.health() do
+    case GrafeoServer.health() do
       {:ok, version} -> {:ok, %{adapter: "grafeo", version: version, status: :healthy}}
       {:error, reason} -> {:error, reason}
     end
@@ -585,10 +584,7 @@ defmodule Cqr.Adapter.Grafeo do
     now = DateTime.utc_now() |> DateTime.to_iso8601()
     confidence = expression.confidence || 0.5
 
-    derived_from_str =
-      expression.derived_from
-      |> Enum.map(&Cqr.Types.format_entity/1)
-      |> Enum.join(",")
+    derived_from_str = Enum.map_join(expression.derived_from, ",", &Cqr.Types.format_entity/1)
 
     expression_text =
       "ASSERT #{Cqr.Types.format_entity(expression.entity)} " <>

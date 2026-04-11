@@ -2,6 +2,8 @@ defmodule Cqr.EngineTest do
   use ExUnit.Case
 
   alias Cqr.Engine
+  alias Cqr.Engine.Planner
+  alias Cqr.Grafeo.Server, as: GrafeoServer
 
   @finance_context %{scope: ["company", "finance"]}
   @engineering_context %{scope: ["company", "engineering"]}
@@ -12,7 +14,7 @@ defmodule Cqr.EngineTest do
         Engine.execute("RESOLVE entity:finance:arr", @finance_context)
 
       assert %Cqr.Result{} = result
-      assert length(result.data) > 0
+      assert [_ | _] = result.data
       assert hd(result.data).name == "arr"
     end
 
@@ -61,7 +63,7 @@ defmodule Cqr.EngineTest do
           @finance_context
         )
 
-      assert length(result.data) > 0
+      assert [_ | _] = result.data
     end
 
     test "scope constraint validation — inaccessible scope" do
@@ -188,12 +190,12 @@ defmodule Cqr.EngineTest do
 
       # CERTIFY writes an immutable CertificationRecord per phase transition.
       {:ok, rows} =
-        Cqr.Grafeo.Server.query(
+        GrafeoServer.query(
           "MATCH (r:CertificationRecord {entity_name: 'ltv'}) " <>
             "RETURN r.new_status, r.authority"
         )
 
-      assert length(rows) > 0
+      assert [_ | _] = rows
       assert Enum.any?(rows, fn row -> row["r.new_status"] == "proposed" end)
     end
   end
@@ -213,19 +215,19 @@ defmodule Cqr.EngineTest do
   describe "Planner" do
     test "plans resolve to Grafeo adapter" do
       ast = %Cqr.Resolve{entity: {"finance", "arr"}}
-      {:ok, plan} = Cqr.Engine.Planner.plan(ast)
+      {:ok, plan} = Planner.plan(ast)
       assert [{Cqr.Adapter.Grafeo, :resolve}] = plan
     end
 
     test "plans discover to Grafeo adapter" do
       ast = %Cqr.Discover{related_to: {:entity, {"product", "churn_rate"}}}
-      {:ok, plan} = Cqr.Engine.Planner.plan(ast)
+      {:ok, plan} = Planner.plan(ast)
       assert [{Cqr.Adapter.Grafeo, :discover}] = plan
     end
 
     test "no adapter for certify returns error" do
       ast = %Cqr.Certify{entity: {"finance", "arr"}, status: :proposed}
-      {:error, error} = Cqr.Engine.Planner.plan(ast)
+      {:error, error} = Planner.plan(ast)
       assert error.code == :no_adapter
     end
 
@@ -243,7 +245,7 @@ defmodule Cqr.EngineTest do
       end
 
       ast = %Cqr.Resolve{entity: {"finance", "arr"}}
-      {:ok, plan} = Cqr.Engine.Planner.plan(ast, adapters: [Cqr.Adapter.Grafeo, MockAdapter])
+      {:ok, plan} = Planner.plan(ast, adapters: [Cqr.Adapter.Grafeo, MockAdapter])
       assert length(plan) == 2
     end
   end
