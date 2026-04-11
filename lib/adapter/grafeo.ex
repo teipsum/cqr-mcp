@@ -15,7 +15,7 @@ defmodule Cqr.Adapter.Grafeo do
   alias Cqr.Repo.Semantic
 
   @impl true
-  def capabilities, do: [:resolve, :discover, :assert]
+  def capabilities, do: [:resolve, :discover, :assert, :trace, :signal, :refresh]
 
   @impl true
   def resolve(%Cqr.Resolve{entity: entity} = expression, scope_context, _opts) do
@@ -748,4 +748,426 @@ defmodule Cqr.Adapter.Grafeo do
         end)
     }
   end
+
+  # --- TRACE ---
+
+  @impl true
+  def trace(%Cqr.Trace{entity: {ns, name}} = expression, _scope_context, _opts) do
+    with {:ok, entity_data} <- Semantic.get_entity(expression.entity, nil),
+         {:ok, assertion} <- fetch_assertion_record(ns, name),
+         {:ok, cert_history} <- fetch_certification_history(ns, name),
+         {:ok, signal_history} <- fetch_signal_history(ns, name),
+         {:ok, derived_chain} <- fetch_derived_from_chain(ns, name, expression.causal_depth),
+         {:ok, referenced} <- fetch_referenced_by(ns, name) do
+      filtered_certs = apply_time_window(cert_history, expression.time_window)
+      filtered_signals = apply_time_window(signal_history, expression.time_window)
+
+      trace_row = %{
+        entity: Cqr.Types.format_entity(expression.entity),
+        current_state: current_state(entity_data),
+        assertion: assertion,
+        certification_history: filtered_certs,
+        signal_history: filtered_signals,
+        derived_from_chain: derived_chain,
+        referenced_by: referenced
+      }
+
+      {:ok,
+       %Cqr.Result{
+         data: [trace_row],
+         sources: ["grafeo"],
+         quality: %Cqr.Quality{
+           reputation: entity_data[:reputation],
+           owner: entity_data[:owner],
+           provenance: "TRACE operation on #{Cqr.Types.format_entity(expression.entity)}",
+           certified_by: entity_data[:certified_by],
+           certified_at: parse_timestamp(entity_data[:certified_at])
+         }
+       }}
+    else
+      {:error, %Cqr.Error{}} = err ->
+        err
+
+      {:error, reason} ->
+        {:error,
+         %Cqr.Error{code: :adapter_error, message: "Grafeo TRACE failed: #{inspect(reason)}"}}
+    end
+  end
+
+  defp current_state(entity_data) do
+    %{
+      type: entity_data[:type],
+      description: entity_data[:description],
+      reputation: entity_data[:reputation],
+      certified: entity_data[:certified],
+      certified_by: entity_data[:certified_by],
+      certified_at: entity_data[:certified_at],
+      owner: entity_data[:owner],
+      freshness_hours_ago: entity_data[:freshness_hours_ago]
+    }
+  end
+
+  defp fetch_assertion_record(ns, name) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})-[:ASSERTED_BY]->" <>
+        "(ar:AssertionRecord) " <>
+        "RETURN ar.record_id, ar.timestamp, ar.agent_id, ar.intent, " <>
+        "ar.confidence, ar.derived_from"
+
+    case GrafeoServer.query(query) do
+      {:ok, []} ->
+        {:ok, nil}
+
+      {:ok, [row | _]} ->
+        {:ok,
+         %{
+           record_id: row["ar.record_id"],
+           asserted_at: row["ar.timestamp"],
+           asserted_by: row["ar.agent_id"],
+           intent: row["ar.intent"],
+           confidence: row["ar.confidence"],
+           derived_from: split_derived_from(row["ar.derived_from"])
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp split_derived_from(nil), do: []
+  defp split_derived_from(""), do: []
+
+  defp split_derived_from(str) when is_binary(str) do
+    str
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+  end
+
+  defp fetch_certification_history(ns, name) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})-[:CERTIFICATION_EVENT]->" <>
+        "(cr:CertificationRecord) " <>
+        "RETURN cr.timestamp, cr.previous_status, cr.new_status, " <>
+        "cr.agent_id, cr.authority, cr.evidence"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        history =
+          rows
+          |> Enum.map(fn row ->
+            %{
+              timestamp: row["cr.timestamp"],
+              from_status: nilify_empty(row["cr.previous_status"]),
+              to_status: row["cr.new_status"],
+              agent: row["cr.agent_id"],
+              authority: nilify_empty(row["cr.authority"]),
+              evidence: nilify_empty(row["cr.evidence"])
+            }
+          end)
+          |> Enum.sort_by(& &1.timestamp)
+
+        {:ok, history}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_signal_history(ns, name) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})-[:SIGNAL_EVENT]->" <>
+        "(sr:SignalRecord) " <>
+        "RETURN sr.timestamp, sr.agent_id, sr.previous_reputation, " <>
+        "sr.new_reputation, sr.evidence"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        history =
+          rows
+          |> Enum.map(fn row ->
+            %{
+              timestamp: row["sr.timestamp"],
+              agent: row["sr.agent_id"],
+              previous_reputation: row["sr.previous_reputation"],
+              new_reputation: row["sr.new_reputation"],
+              evidence: nilify_empty(row["sr.evidence"])
+            }
+          end)
+          |> Enum.sort_by(& &1.timestamp)
+
+        {:ok, history}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Grafeo's Cypher dialect does not support variable-length edges inside a
+  # pattern like `-[:DERIVED_FROM*1..2]->` alongside property predicates,
+  # so we walk the chain one hop at a time and merge the per-depth rows
+  # with a depth tag. The depths are at most 10 (hard cap) so the extra
+  # round-trips are acceptable and kept under the 3s MCP budget.
+  defp fetch_derived_from_chain(ns, name, depth) when depth > 0 do
+    capped_depth = min(depth, 10)
+
+    Enum.reduce_while(1..capped_depth, {:ok, [], [{ns, name}]}, fn level, {:ok, acc, frontier} ->
+      case expand_derived_frontier(frontier, level) do
+        {:ok, [], _next} ->
+          {:halt, {:ok, acc, []}}
+
+        {:ok, new_rows, next_frontier} ->
+          {:cont, {:ok, acc ++ new_rows, next_frontier}}
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rows, _} -> {:ok, rows}
+      other -> other
+    end
+  end
+
+  defp fetch_derived_from_chain(_ns, _name, _depth), do: {:ok, []}
+
+  defp expand_derived_frontier(frontier, level) do
+    Enum.reduce_while(frontier, {:ok, [], []}, &step_expand_frontier(&1, &2, level))
+  end
+
+  defp step_expand_frontier({src_ns, src_name}, {:ok, acc, next}, level) do
+    query =
+      "MATCH (e:Entity {namespace: '#{src_ns}', name: '#{src_name}'})-[:DERIVED_FROM]->" <>
+        "(source:Entity) " <>
+        "RETURN source.namespace, source.name, source.type, source.description, " <>
+        "source.reputation, source.certified"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        new_rows = Enum.map(rows, &derived_row(&1, level))
+        new_frontier = Enum.map(rows, fn row -> {row["source.namespace"], row["source.name"]} end)
+        {:cont, {:ok, acc ++ new_rows, next ++ new_frontier}}
+
+      {:error, reason} ->
+        {:halt, {:error, reason}}
+    end
+  end
+
+  defp derived_row(row, level) do
+    %{
+      entity: Cqr.Types.format_entity({row["source.namespace"], row["source.name"]}),
+      depth: level,
+      type: row["source.type"],
+      description: row["source.description"],
+      reputation: row["source.reputation"],
+      certified: row["source.certified"]
+    }
+  end
+
+  defp fetch_referenced_by(ns, name) do
+    query =
+      "MATCH (dependent:Entity)-[:DERIVED_FROM]->(e:Entity {namespace: '#{ns}', name: '#{name}'}) " <>
+        "RETURN dependent.namespace, dependent.name, dependent.type, dependent.description"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        result =
+          Enum.map(rows, fn row ->
+            %{
+              entity:
+                Cqr.Types.format_entity({row["dependent.namespace"], row["dependent.name"]}),
+              relationship: "DERIVED_FROM",
+              type: row["dependent.type"],
+              description: row["dependent.description"]
+            }
+          end)
+
+        {:ok, result}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Filter a history list to events whose timestamp is newer than
+  # `now - window`. When no window is set, return everything.
+  defp apply_time_window(events, nil), do: events
+
+  defp apply_time_window(events, {amount, unit}) do
+    cutoff_seconds = duration_to_seconds(amount, unit)
+    cutoff = DateTime.add(DateTime.utc_now(), -cutoff_seconds, :second)
+
+    Enum.filter(events, fn event ->
+      case parse_timestamp(event.timestamp) do
+        nil -> true
+        dt -> DateTime.compare(dt, cutoff) != :lt
+      end
+    end)
+  end
+
+  defp duration_to_seconds(amount, :m), do: amount * 60
+  defp duration_to_seconds(amount, :h), do: amount * 60 * 60
+  defp duration_to_seconds(amount, :d), do: amount * 60 * 60 * 24
+  defp duration_to_seconds(amount, :w), do: amount * 60 * 60 * 24 * 7
+
+  defp nilify_empty(nil), do: nil
+  defp nilify_empty(""), do: nil
+  defp nilify_empty(v), do: v
+
+  # --- SIGNAL ---
+
+  @impl true
+  def signal(%Cqr.Signal{entity: {ns, name}} = expression, _scope_context, opts) do
+    agent_id = Keyword.get(opts, :agent_id, "anonymous")
+    previous_reputation = Keyword.get(opts, :previous_reputation)
+    now = DateTime.utc_now()
+    timestamp = DateTime.to_iso8601(now)
+
+    with {:ok, record_id} <- generate_signal_record_id(),
+         :ok <-
+           write_signal_record(expression, agent_id, record_id, previous_reputation, timestamp),
+         :ok <- write_signal_event_edge({ns, name}, record_id),
+         :ok <- update_entity_reputation({ns, name}, expression.score) do
+      result = %Cqr.Result{
+        data: [
+          %{
+            entity: Cqr.Types.format_entity(expression.entity),
+            previous_reputation: previous_reputation,
+            new_reputation: expression.score,
+            evidence: expression.evidence,
+            signaled_by: agent_id,
+            signaled_at: now,
+            record_id: record_id
+          }
+        ],
+        sources: ["grafeo"],
+        quality: %Cqr.Quality{
+          freshness: now,
+          reputation: expression.score,
+          owner: agent_id,
+          provenance: "SIGNAL operation by #{agent_id}"
+        }
+      }
+
+      {:ok, result}
+    end
+  end
+
+  defp generate_signal_record_id do
+    <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)
+    c = Bitwise.bor(Bitwise.band(c, 0x0FFF), 0x4000)
+    d = Bitwise.bor(Bitwise.band(d, 0x3FFF), 0x8000)
+
+    uuid =
+      :io_lib.format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b", [a, b, c, d, e])
+      |> IO.iodata_to_binary()
+
+    {:ok, uuid}
+  end
+
+  defp write_signal_record(
+         %Cqr.Signal{entity: {ns, name}} = signal,
+         agent_id,
+         record_id,
+         previous_reputation,
+         timestamp
+       ) do
+    previous_val = previous_reputation || 0.0
+
+    query =
+      "INSERT (:SignalRecord {" <>
+        "record_id: '#{record_id}', " <>
+        "entity_namespace: '#{ns}', entity_name: '#{name}', " <>
+        "agent_id: '#{escape(agent_id)}', " <>
+        "previous_reputation: #{previous_val}, " <>
+        "new_reputation: #{signal.score}, " <>
+        "evidence: '#{escape(signal.evidence)}', " <>
+        "timestamp: '#{timestamp}'" <>
+        "})"
+
+    exec_write(query)
+  end
+
+  defp write_signal_event_edge({ns, name}, record_id) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}), " <>
+        "(r:SignalRecord {record_id: '#{record_id}'}) " <>
+        "INSERT (e)-[:SIGNAL_EVENT]->(r)"
+
+    exec_write(query)
+  end
+
+  defp update_entity_reputation({ns, name}, new_score) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}) " <>
+        "SET e.reputation = #{new_score}"
+
+    exec_write(query)
+  end
+
+  # --- REFRESH CHECK ---
+
+  @impl true
+  def refresh_check(%Cqr.Refresh{} = expression, scope_context, _opts) do
+    visible = scope_context[:visible_scopes] || []
+    threshold_hours = threshold_to_hours(expression.threshold)
+
+    case query_stale_entities(visible, threshold_hours) do
+      {:ok, rows} ->
+        stale =
+          rows
+          |> Enum.map(fn row ->
+            freshness = row["e.freshness_hours_ago"] || 0
+
+            %{
+              entity: Cqr.Types.format_entity({row["e.namespace"], row["e.name"]}),
+              type: row["e.type"],
+              description: row["e.description"],
+              owner: row["e.owner"],
+              freshness_hours_ago: freshness,
+              threshold_exceeded_by: max(freshness - threshold_hours, 0),
+              reputation: row["e.reputation"],
+              certified: row["e.certified"]
+            }
+          end)
+          |> Enum.sort_by(fn item -> -item.freshness_hours_ago end)
+
+        {:ok,
+         %Cqr.Result{
+           data: stale,
+           sources: ["grafeo"],
+           quality: %Cqr.Quality{
+             freshness: DateTime.utc_now(),
+             provenance: "REFRESH CHECK (threshold: #{threshold_hours}h)"
+           }
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %Cqr.Error{
+           code: :adapter_error,
+           message: "Grafeo REFRESH failed: #{inspect(reason)}"
+         }}
+    end
+  end
+
+  defp query_stale_entities([], _threshold_hours), do: {:ok, []}
+
+  defp query_stale_entities(visible_scopes, threshold_hours) do
+    scope_list =
+      Enum.map_join(visible_scopes, ", ", fn segments -> "\"#{Enum.join(segments, ":")}\"" end)
+
+    query =
+      "MATCH (e:Entity)-[:IN_SCOPE]->(s:Scope) " <>
+        "WHERE s.path IN [#{scope_list}] " <>
+        "AND e.freshness_hours_ago > #{threshold_hours} " <>
+        "RETURN DISTINCT e.namespace, e.name, e.type, e.description, e.owner, " <>
+        "e.reputation, e.freshness_hours_ago, e.certified"
+
+    GrafeoServer.query(query)
+  end
+
+  defp threshold_to_hours({amount, :m}), do: max(div(amount, 60), 0)
+  defp threshold_to_hours({amount, :h}), do: amount
+  defp threshold_to_hours({amount, :d}), do: amount * 24
+  defp threshold_to_hours({amount, :w}), do: amount * 24 * 7
 end

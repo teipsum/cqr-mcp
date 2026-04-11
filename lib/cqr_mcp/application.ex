@@ -14,8 +14,10 @@ defmodule CqrMcp.Application do
   def start(_type, _args) do
     register_session()
 
+    {storage, seed, reset} = parse_storage_args(System.argv())
+
     children = [
-      {Cqr.Grafeo.Server, storage: :memory},
+      {Cqr.Grafeo.Server, storage: storage, seed: seed, reset: reset},
       Cqr.Repo.ScopeTree,
       CqrMcp.Server
     ]
@@ -23,6 +25,35 @@ defmodule CqrMcp.Application do
     opts = [strategy: :one_for_one, name: CqrMcp.Supervisor]
     Supervisor.start_link(children, opts)
   end
+
+  # Parse --persist and --reset from the command line.
+  #
+  # In-memory (default): always seeds, never resets.
+  # Persistent (--persist [path]): does not seed unless --reset is passed.
+  # Persistent + --reset: deletes DB file, opens fresh, seeds sample data.
+  defp parse_storage_args(argv) do
+    if "--persist" in argv do
+      path =
+        argv
+        |> Enum.drop_while(&(&1 != "--persist"))
+        |> Enum.drop(1)
+        |> Enum.at(0)
+
+      path =
+        if is_binary(path) and not String.starts_with?(path, "--") do
+          path
+        else
+          default_db_path()
+        end
+
+      reset = "--reset" in argv
+      {{:path, path}, reset, reset}
+    else
+      {:memory, true, false}
+    end
+  end
+
+  defp default_db_path, do: Path.expand("~/.cqr/grafeo.db")
 
   # Generate a session id and capture the boot timestamps once at startup,
   # stash them in :persistent_term so the cqr://session resource can read

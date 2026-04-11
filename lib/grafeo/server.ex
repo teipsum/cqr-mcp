@@ -44,6 +44,9 @@ defmodule Cqr.Grafeo.Server do
   def init(opts) do
     storage = Keyword.get(opts, :storage, :memory)
     seed = Keyword.get(opts, :seed, true)
+    reset = Keyword.get(opts, :reset, false)
+
+    prepare_storage(storage, reset)
 
     case open_database(storage) do
       {:ok, db} ->
@@ -78,6 +81,19 @@ defmodule Cqr.Grafeo.Server do
   end
 
   # --- Private ---
+
+  defp prepare_storage({:path, path}, reset) do
+    File.mkdir_p!(Path.dirname(path))
+
+    if reset do
+      File.rm(path)
+      Logger.info("Reset: deleted existing database at #{path}")
+    end
+
+    :ok
+  end
+
+  defp prepare_storage(:memory, _reset), do: :ok
 
   defp open_database(:memory) do
     {:ok, _db} = Native.new(:memory)
