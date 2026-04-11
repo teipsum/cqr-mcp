@@ -1,8 +1,8 @@
 # CQR MCP Demo Script
 
-A reproducible walkthrough of the CQR MCP server. Runs in roughly six minutes against a fresh clone — no Docker, no external database, no network dependencies. Every step works every time because the embedded Grafeo database and sample dataset ship with the repository.
+A reproducible walkthrough of the CQR MCP server. Runs in roughly nine minutes against a fresh clone — no Docker, no external database, no network dependencies. Every step works every time because the embedded Grafeo database and sample dataset ship with the repository.
 
-The demo covers the full V1 knowledge lifecycle: resolve canonical context, discover neighborhoods, enforce scope boundaries, assert agent findings with provenance, and certify them through the governance lifecycle.
+The demo covers the full V1 knowledge lifecycle: resolve canonical context, discover neighborhoods, enforce scope boundaries, assert agent findings with provenance, certify them through the governance lifecycle, signal reputation changes with audit trails, scan for stale context, and trace the full epistemic chain behind any entity.
 
 ---
 
@@ -17,7 +17,7 @@ mix run --no-halt
 
 On first boot the embedded Grafeo database is created, the sample SaaS dataset is seeded (6 scopes, 27 entities, 17 typed relationships), and the server begins listening on stdio for MCP connections.
 
-In a second terminal, connect Claude Desktop (or any MCP client) to the running server. The tools `cqr_resolve`, `cqr_discover`, `cqr_certify`, and `cqr_assert` should appear in the client's tool picker.
+In a second terminal, connect Claude Desktop (or any MCP client) to the running server. Seven tools should appear in the client's tool picker: `cqr_resolve`, `cqr_discover`, `cqr_certify`, `cqr_assert`, `cqr_trace`, `cqr_signal`, and `cqr_refresh`.
 
 For the rest of the demo, commands are issued through the MCP client as natural-language prompts. The client's LLM translates them into CQR expressions and calls the appropriate tool.
 
@@ -156,6 +156,74 @@ Restart and reconnect.
 - The governance audit trail is queryable
 
 **Point to make:** the full knowledge lifecycle in one protocol. Discover existing context, derive new findings with provenance, govern those findings through a formal lifecycle. Every step is a CQR primitive. Every step leaves an audit trail.
+
+---
+
+## 7. SIGNAL — reputation assessment (45 seconds)
+
+**Prompt the agent:**
+> The time_to_value metric's upstream pipeline just refreshed. Update its reputation.
+
+**Under the hood** — the agent calls `cqr_signal` with:
+
+```json
+{
+  "entity": "entity:product:time_to_value",
+  "score": 0.85,
+  "evidence": "upstream pipeline refreshed, data is current"
+}
+```
+
+**What to show:**
+- `previous_reputation` vs `new_reputation` in the response
+- The `SignalRecord` UUID and timestamp
+- RESOLVE the entity afterward — the new reputation is visible; certification status is untouched
+
+**Point to make:** agents don't just consume context — they curate it. Every quality assessment is auditable. SIGNAL preserves certification state so "certified but currently degraded" and "certified and recently verified" are both expressible, and both live in the same audit trail that TRACE walks.
+
+---
+
+## 8. REFRESH — staleness scan (45 seconds)
+
+**Prompt the agent:**
+> What context is stale and needs attention?
+
+**Under the hood** — the agent calls `cqr_refresh` with:
+
+```json
+{ "threshold": "24h" }
+```
+
+**What to show:**
+- Stale items sorted by `freshness_hours_ago` descending (most stale first)
+- The `threshold_exceeded_by` field on each item (how far past the threshold)
+- Each item carries the owner, reputation, and certification status so the agent can triage
+
+**Point to make:** proactive context maintenance. The agent identifies governance gaps before they cause problems. A REFRESH-before-answer pattern in an agent loop catches stale sources before they corrupt downstream reasoning — and it is a cheap query, not a full retrieval pipeline.
+
+---
+
+## 9. TRACE — provenance walk (60 seconds)
+
+**Prompt the agent:**
+> How did the entity we just asserted come to exist? Show me the full provenance chain.
+
+**Under the hood** — the agent calls `cqr_trace` with:
+
+```json
+{
+  "entity": "entity:product:churn_nps_leading_indicator",
+  "depth": 2
+}
+```
+
+**What to show:**
+- The assertion record: `asserted_by`, `intent`, `derived_from`, timestamp
+- The certification history: three transitions (proposed → under_review → certified) with authority and evidence on each
+- The signal history: any SignalRecords written after certification
+- The `derived_from_chain` walking two hops through the lineage (direct sources and sources-of-sources)
+
+**Point to make:** epistemic provenance. The agent can explain not just what it knows, but how it came to know it and why it should be trusted. Every primitive that writes leaves a record; TRACE is how those records compose into an auditable story. This is the difference between a database that happens to be used by an agent and a context layer designed for governed autonomy.
 
 ---
 

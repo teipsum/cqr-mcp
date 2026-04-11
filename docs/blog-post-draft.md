@@ -38,6 +38,8 @@ The agent does not have to trust the response blindly. Every field has metadata 
 
 Reads are only half the story. Agents also generate context — derived metrics, working hypotheses, synthesized findings — and most systems have no coherent way to absorb that output. Dump it in a scratch table and it pollutes the canonical store. Reject it entirely and you lose the agent's reasoning. CQR splits the difference with a two-tier trust model. The `ASSERT` primitive lets an agent write a new entity with mandatory `INTENT` and `DERIVED_FROM` clauses, and the result lands in the graph as `certified: false` with full lineage to its source entities. It is immediately visible to subsequent resolves and discovers, but every downstream reader knows it is rumor with a paper trail. A separate `CERTIFY` primitive walks definitions through a formal lifecycle — `proposed → under_review → certified → superseded` — with each transition producing an audit record. Agent-generated knowledge becomes governable, not just storable.
 
+And when quality shifts — a pipeline refreshes, a source goes stale, a validation check fails — `SIGNAL` updates reputation scores with evidence and leaves an immutable `SignalRecord` in the audit trail, preserving certification status so "certified but currently degraded" is a first-class state. `TRACE` walks the provenance chain in the other direction: given any entity, it reconstructs the assertion record, the full certification history, every signal written against it, and the `DERIVED_FROM` lineage out to configurable depth. Together, the write primitives and TRACE give the agent an answer not just to "what is this value" but to "how did this come to exist, what has changed it, and why should I trust it."
+
 ## The architecture bet
 
 The reference implementation is one Elixir/OTP application. Grafeo — a pure-Rust graph database with LPG + RDF, Cypher + GQL, HNSW vector search, BM25 full-text, and ACID MVCC — is embedded directly into the BEAM via a Rustler NIF. No Docker. No external database. No network hop between engine and storage. The entire server boots in a single OS process and listens on stdio for MCP connections.
@@ -52,6 +54,6 @@ The server is open source under Business Source License 1.1. The change date is 
 
 ## Try it
 
-The repository is at `github.com/teipsum/cqr-mcp`. Clone it, run it, connect Claude Desktop, and query governed context in under ten minutes. The protocol specification lives in `docs/cqr-primer.md` — read that if you want the full eleven-primitive grammar, the reasoning primitives specified but not yet shipped in V1, and the adapter behaviour contract.
+The repository is at `github.com/teipsum/cqr-mcp`. Clone it, run it, connect Claude Desktop, and query governed context in under ten minutes. The protocol specification lives in `docs/cqr-primer.md` — read that if you want the full eleven-primitive grammar (seven shipped in V1, four reasoning primitives specified for V2) and the adapter behaviour contract.
 
 If you are deploying agents inside an organization that cares about who is allowed to know what, we are talking to design partners. File an issue, open a discussion, and push on the architecture. The problem is real, the work is in progress, and the protocol is ready to be used.
