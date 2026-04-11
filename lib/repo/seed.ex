@@ -113,9 +113,10 @@ defmodule Cqr.Repo.Seed do
   defp normalize(vec) do
     mag = :math.sqrt(Enum.reduce(vec, 0.0, fn x, acc -> acc + x * x end))
 
-    case mag do
-      0.0 -> vec
-      m -> Enum.map(vec, fn x -> x / m end)
+    if mag == 0.0 do
+      vec
+    else
+      Enum.map(vec, fn x -> x / mag end)
     end
   end
 
