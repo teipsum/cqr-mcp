@@ -60,9 +60,10 @@ defmodule CqrMcp.Handler do
 
   defp handle_method("tools/call", %{"name" => name, "arguments" => args}) do
     context = agent_context()
+    task = Task.async(fn -> CqrMcp.Tools.call(name, args, context) end)
 
-    case CqrMcp.Tools.call(name, args, context) do
-      {:ok, result} ->
+    case Task.yield(task, 3_000) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, result}} ->
         {:result,
          %{
            "content" => [
@@ -73,7 +74,7 @@ defmodule CqrMcp.Handler do
            ]
          }}
 
-      {:error, error} ->
+      {:ok, {:error, error}} ->
         {:result,
          %{
            "content" => [
@@ -83,6 +84,16 @@ defmodule CqrMcp.Handler do
              }
            ],
            "isError" => true
+         }}
+
+      nil ->
+        {:error,
+         %{
+           "code" => -32_000,
+           "message" => "Query timed out after 3 seconds",
+           "data" => %{
+             "retry_guidance" => "Simplify the query, reduce depth, or narrow scope"
+           }
          }}
     end
   end

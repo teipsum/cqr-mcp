@@ -30,7 +30,7 @@ defmodule Cqr.Grafeo.Server do
 
   @doc "Execute a GQL/Cypher query against the embedded Grafeo database."
   def query(query_string, name \\ @default_name) do
-    GenServer.call(name, {:query, query_string}, :timer.seconds(30))
+    GenServer.call(name, {:query, query_string})
   end
 
   @doc "Check database health. Returns `{:ok, version}` or `{:error, reason}`."
