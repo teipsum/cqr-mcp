@@ -407,9 +407,8 @@ Do NOT spend more than 1.5 days on NIF issues before switching to a fallback. Th
      description: "Resolve a canonical entity by semantic address
                    from governed organizational context"
      input_schema:
-       intent: string (required) — natural language description
-       entity: string (optional) — explicit entity reference (entity:namespace:name)
-       scope: string (optional) — scope constraint
+       entity: string (required) — entity reference (entity:namespace:name)
+       scope: string (optional) — scope constraint (scope:seg1:seg2)
        freshness: string (optional) — freshness requirement (e.g., "24h")
        reputation: float (optional) — minimum reputation threshold
      output: governed context with quality metadata envelope
@@ -418,27 +417,41 @@ Do NOT spend more than 1.5 days on NIF issues before switching to a fallback. Th
      description: "Discover concepts related to an entity or topic
                    within governed organizational context"
      input_schema:
-       topic: string (required) — entity reference or search term
+       topic: string (required) — entity reference or plain search term
        scope: string (optional) — scope constraint (comma-separated for multiple)
        depth: integer (optional, default 2) — traversal depth
-     output: neighborhood map with relationship types and quality annotations
+       direction: enum [outbound, inbound, both] (optional, default both)
+     output: neighborhood map with relationship types, direction tags
+             ("outbound" | "inbound"), and quality annotations
+     notes: edges are stored once, directionally; the relationship type
+            always reads in its original stored direction
 
    cqr_certify:
      description: "Propose, review, or approve a governance definition
                    in the organizational context"
      input_schema:
-       definition: string (required) — definition identifier
-       action: enum [propose, review, approve] (required)
+       entity: string (required) — entity reference
+       status: enum [proposed, under_review, certified, superseded] (required)
+       authority: string (optional) — bare identifier (cfo) or quoted
+                  free-form string (e.g., "agent:twin:michael") allowing
+                  colons in opaque authority IDs
        evidence: string (optional) — supporting evidence
-       scope: string (optional) — governance scope
      output: certification status with provenance chain
    ```
 
+   **V2 primitives planned:** ASSERT, TRACE, HYPOTHESIZE, COMPARE, ANCHOR, SIGNAL, REFRESH, AWARENESS. ASSERT is the next primitive scheduled to land — see `specs/Assert primitive specification.md`. The full canonical protocol is in `README.md` at the repository root.
+
 3. **Resource definitions** — `CqrMcp.Resources`:
    ```
-   cqr://scopes — Organizational scope hierarchy with visibility rules
-   cqr://entities — Entity definitions with namespace, type, scope, certification status
-   cqr://policies — Governance rules, freshness requirements, reputation thresholds per scope
+   cqr://session       — Current agent identity and connection context.
+                          Returns: agent_id (CQR_AGENT_ID env), agent_scope
+                          (CQR_AGENT_SCOPE env), visible_scopes (full
+                          bidirectional set), permissions, connected_adapters,
+                          server_version, protocol ("CQR/1.0"), uptime_seconds,
+                          connection { transport, connected_at, session_id (UUIDv4) }
+   cqr://scopes        — Organizational scope hierarchy with visibility rules
+   cqr://entities      — Entity definitions with namespace, type, scope, certification status
+   cqr://policies      — Governance rules, freshness requirements, reputation thresholds per scope
    cqr://system_prompt — CQR agent generation contract for LLM CQR generation
    ```
 

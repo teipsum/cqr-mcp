@@ -1,4 +1,4 @@
-**SEQUR Validation Test Suite**
+**CQR Validation Test Suite**
 
 MVP1 Feature Definition
 
@@ -6,9 +6,11 @@ Current State Assessment, Feature Specifications, and Patent Evidence Requiremen
 
 TEIPSUM / UNICA Platform
 
-March 2026
+March 2026 (originally drafted under the SEQUR name, renamed April 2026)
 
 **CONFIDENTIAL**
+
+> **Naming note:** This document was originally written when the protocol was named **SEQUR** (Semantic Query Resolution). It has been updated to use the current name, **CQR** (Cognitive Query Resolution). Module references like `Sequr.Parser` are now `Cqr.Parser`. The USPTO provisional patent application was filed under the SEQUR name; all claims and semantics apply to CQR. Pronunciation: "C-Q-R" sounds like "seeker."
 
 # Current State Assessment
 
