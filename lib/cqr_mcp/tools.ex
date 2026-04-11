@@ -513,6 +513,15 @@ defmodule CqrMcp.Tools do
   defp format_value(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
   defp format_value({a, b}) when is_binary(a) and is_binary(b), do: "#{a}:#{b}"
   defp format_value(list) when is_list(list), do: Enum.map(list, &format_value/1)
+  # Recursively normalize nested maps (e.g. conflicts.conflicting_values carry
+  # inner rows whose `entity` field is still a `{ns, name}` tuple). Without
+  # this clause Jason.encode! in the handler raises Protocol.UndefinedError
+  # on the tuple and the response never makes it back to the client, which
+  # looks like a stdio hang to the caller.
+  defp format_value(%{} = map) when not is_struct(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), format_value(v)} end)
+  end
+
   defp format_value(atom) when is_atom(atom) and atom != nil, do: to_string(atom)
   defp format_value(v), do: v
 
