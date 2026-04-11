@@ -8,9 +8,13 @@ Thank you for your interest in CQR MCP Server. This document describes how to se
 
 - **Elixir** 1.17 or later (this project targets 1.19)
 - **Erlang/OTP** 27 or later
-- **Rust** toolchain (stable) — required for compiling the Grafeo NIF on first build
+- **Rust** toolchain (stable) — only required if you are modifying the Grafeo NIF itself or if your platform has no published precompiled binary
 
-Precompiled NIF binaries are published for common platforms. If your platform is supported, Rust is only required if you are modifying the NIF itself. Otherwise, `mix deps.get` will fetch a precompiled binary.
+Precompiled NIF binaries are published for common platforms
+(`aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`,
+`aarch64-unknown-linux-gnu`). On supported platforms, `mix deps.get`
+downloads the matching binary from the project's GitHub release and no
+Rust toolchain is needed.
 
 ### Setup
 
@@ -21,7 +25,20 @@ mix deps.get
 mix compile
 ```
 
-The first compile triggers NIF compilation if no precompiled binary is available for your platform. Subsequent builds are fast.
+### Building the NIF from source
+
+If you are editing the Rust crate in `native/cqr_grafeo/`, or if you are on
+a platform without a published precompiled binary, force a local source
+build by setting `CQR_BUILD_NIF`:
+
+```bash
+CQR_BUILD_NIF=true mix deps.get
+CQR_BUILD_NIF=true mix compile
+CQR_BUILD_NIF=true mix test
+```
+
+This makes `rustler_precompiled` delegate to `rustler`, which invokes
+`cargo` under `native/cqr_grafeo/`.
 
 ### Running the server
 

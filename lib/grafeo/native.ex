@@ -12,11 +12,30 @@ defmodule Cqr.Grafeo.Native do
     * `execute/2` — execute a GQL/Cypher query, returns JSON string
     * `close/1` — close the database handle
     * `health_check/1` — report operational status and version
+
+  ## Precompiled binaries
+
+  By default this module is backed by precompiled NIF binaries downloaded
+  from the project's GitHub releases, so end users do not need a Rust
+  toolchain. Contributors modifying the Rust crate can force a source
+  build by setting `CQR_BUILD_NIF=true` before `mix deps.get` / `mix compile`.
   """
 
-  use Rustler,
+  version = Mix.Project.config()[:version]
+
+  use RustlerPrecompiled,
     otp_app: :cqr_mcp,
-    crate: "cqr_grafeo"
+    crate: "cqr_grafeo",
+    base_url: "https://github.com/teipsum/cqr-mcp/releases/download/v#{version}",
+    force_build: System.get_env("CQR_BUILD_NIF") in ["1", "true"],
+    version: version,
+    nif_versions: ["2.16"],
+    targets: ~w(
+      aarch64-apple-darwin
+      x86_64-apple-darwin
+      x86_64-unknown-linux-gnu
+      aarch64-unknown-linux-gnu
+    )
 
   @doc "Open an in-memory (`:memory`) or persistent (path string) Grafeo database."
   def new(_path), do: :erlang.nif_error(:nif_not_loaded)
