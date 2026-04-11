@@ -38,23 +38,25 @@ defmodule CqrMcp.Server do
 
   @impl true
   def handle_info({:mcp_message, line}, state) do
-    case Jason.decode(line) do
-      {:ok, request} ->
-        response = CqrMcp.Handler.handle_request(request)
+    spawn(fn ->
+      case Jason.decode(line) do
+        {:ok, request} ->
+          response = CqrMcp.Handler.handle_request(request)
 
-        if response do
-          write_response(response)
-        end
+          if response do
+            write_response(response)
+          end
 
-      {:error, _} ->
-        error = %{
-          "jsonrpc" => "2.0",
-          "id" => nil,
-          "error" => %{"code" => -32_700, "message" => "Parse error"}
-        }
+        {:error, _} ->
+          error = %{
+            "jsonrpc" => "2.0",
+            "id" => nil,
+            "error" => %{"code" => -32_700, "message" => "Parse error"}
+          }
 
-        write_response(error)
-    end
+          write_response(error)
+      end
+    end)
 
     {:noreply, state}
   end

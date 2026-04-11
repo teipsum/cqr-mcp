@@ -60,10 +60,17 @@ defmodule CqrMcp.Handler do
 
   defp handle_method("tools/call", %{"name" => name, "arguments" => args}) do
     context = agent_context()
-    task = Task.async(fn -> CqrMcp.Tools.call(name, args, context) end)
+    caller = self()
+    ref = make_ref()
 
-    case Task.yield(task, 3_000) do
-      {:ok, {:ok, result}} ->
+    pid =
+      spawn(fn ->
+        result = CqrMcp.Tools.call(name, args, context)
+        send(caller, {ref, result})
+      end)
+
+    receive do
+      {^ref, {:ok, result}} ->
         {:result,
          %{
            "content" => [
@@ -74,7 +81,7 @@ defmodule CqrMcp.Handler do
            ]
          }}
 
-      {:ok, {:error, error}} ->
+      {^ref, {:error, error}} ->
         {:result,
          %{
            "content" => [
@@ -85,8 +92,10 @@ defmodule CqrMcp.Handler do
            ],
            "isError" => true
          }}
+    after
+      3_000 ->
+        Process.exit(pid, :kill)
 
-      nil ->
         {:error,
          %{
            "code" => -32_000,
