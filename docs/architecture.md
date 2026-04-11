@@ -78,7 +78,7 @@ Everything else — query planning, adapter dispatch, scope resolution, quality 
 
 All query traffic is routed through `Cqr.Grafeo.Server`, a GenServer that owns the NIF handle and serializes access. Concurrent MCP requests produce a queue of `GenServer.call` messages rather than concurrent NIF invocations. Grafeo supports concurrent reads internally, but serializing at the BEAM boundary gives us one choke point for instrumentation, backpressure, and future pooling.
 
-Grafeo runs in-memory by default. Persistent mode is configurable for production deployments that need durability across restarts.
+Grafeo runs in-memory by default. Pass `--persist` at startup for durable storage across restarts — the server opens or creates `~/.cqr/grafeo.db` (or a custom path supplied after the flag) and skips the sample-data seeder. See `README.md` for the full flag reference.
 
 ## 3. Multi-Paradigm Query Composition
 
@@ -102,15 +102,18 @@ The critical design choice is the **ordering**: stage 1 runs first and constrain
 `Cqr.Adapter.Behaviour` defines the contract every storage backend implements:
 
 ```elixir
-@callback resolve(expression, scope_context, opts) :: {:ok, term} | {:error, term}
-@callback discover(expression, scope_context, opts) :: {:ok, term} | {:error, term}
-@callback assert(expression, scope_context, opts)  :: {:ok, term} | {:error, term}
-@callback normalize(raw_results, metadata)         :: term
-@callback health_check()                           :: :ok | {:error, term}
-@callback capabilities()                           :: [atom]
+@callback resolve(expression, scope_context, opts)        :: {:ok, term} | {:error, term}
+@callback discover(expression, scope_context, opts)       :: {:ok, term} | {:error, term}
+@callback assert(expression, scope_context, opts)         :: {:ok, term} | {:error, term}
+@callback trace(expression, scope_context, opts)          :: {:ok, term} | {:error, term}
+@callback signal(expression, scope_context, opts)         :: {:ok, term} | {:error, term}
+@callback refresh_check(expression, scope_context, opts)  :: {:ok, term} | {:error, term}
+@callback normalize(raw_results, metadata)                :: term
+@callback health_check()                                  :: :ok | {:error, term}
+@callback capabilities()                                  :: [atom]
 ```
 
-`assert/3` is optional — backends that only support reads declare their capabilities accordingly and the engine planner skips them for write operations.
+`assert/3`, `trace/3`, `signal/3`, and `refresh_check/3` are optional callbacks — backends that only support reads declare their capabilities accordingly and the engine planner skips them for operations they do not implement.
 
 The engine's `Planner` inspects each adapter's `capabilities/0` and routes expressions only to adapters that can handle them. Multi-adapter deployments fan out concurrently via `Task.async_stream` with a 30-second timeout; results are merged with explicit conflict preservation — if two adapters return different values for the same entity, both are returned with source attribution rather than one being silently picked.
 

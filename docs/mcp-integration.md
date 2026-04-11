@@ -56,7 +56,7 @@ Persistent mode opens (or creates) `~/.cqr/grafeo.db` and does **not** seed the 
 
 Once Claude Desktop reconnects:
 
-1. Open the tool picker. Four tools appear: `cqr_resolve`, `cqr_discover`, `cqr_certify`, `cqr_assert`.
+1. Open the tool picker. Seven tools appear: `cqr_resolve`, `cqr_discover`, `cqr_certify`, `cqr_assert`, `cqr_trace`, `cqr_signal`, `cqr_refresh`.
 2. Open the resource browser. The `cqr://session` resource shows the current agent identity, visible scopes, connected adapters, and protocol version.
 3. Ask Claude a grounded question: *"Use cqr_discover to show me what's connected to churn rate."* The tool call, result envelope, and quality metadata should render inline.
 
@@ -78,7 +78,7 @@ Any MCP client that speaks JSON-RPC 2.0 over stdio can connect to CQR. SSE trans
 
 ### Tool schemas
 
-Four tools are exposed. Full JSON Schema definitions are available via the standard `tools/list` MCP method.
+Seven tools are exposed. Full JSON Schema definitions are available via the standard `tools/list` MCP method.
 
 ```
 cqr_resolve(entity, scope?, freshness?, reputation?)
@@ -86,6 +86,9 @@ cqr_discover(topic, scope?, depth?, direction?)
 cqr_certify(entity, status, authority?, evidence?)
 cqr_assert(entity, type, description, intent, derived_from,
            scope?, confidence?, relationships?)
+cqr_trace(entity, depth?, time_window?)
+cqr_signal(entity, score, evidence)
+cqr_refresh(threshold?, scope?)
 ```
 
 Required fields for each tool are enforced by the server; missing fields produce a structured error envelope rather than a crash.
@@ -137,6 +140,22 @@ When asserting new context with cqr_assert, populate INTENT with the user's
 actual question and DERIVED_FROM with the entities you used to derive the
 finding. These fields are mandatory and they are the governance paper trail —
 future agents and humans will audit them.
+
+When a user asks "how did this come to exist?" or "why should I trust this?",
+call cqr_trace on the entity. The trace returns the assertion record, full
+certification history, signal history, and the derived-from chain — enough
+to explain provenance end to end.
+
+When you observe that a source's data quality has changed — a pipeline just
+refreshed, a source went stale, a validation check failed — call cqr_signal
+with a new reputation score and a short evidence string. Signals preserve
+certification status; they only move the reputation dial. Downstream agents
+(and downstream humans reading TRACE) will see the update.
+
+Before answering high-stakes questions, consider cqr_refresh as a cheap
+pre-flight check. It returns any stale context in your visible scope, sorted
+most-stale-first. If the answer depends on an entity in that list, mention
+the staleness or call cqr_resolve with a freshness constraint.
 ```
 
 Load this snippet alongside `cqr://system_prompt` and the agent will handle CQR idiomatically on the first try.

@@ -31,23 +31,30 @@ CQR defines eleven primitives in five categories. Each one maps to a cognitive o
 
 **ASSERT** — *Uncertified write with provenance.* Agents write findings, derived metrics, and working hypotheses into the graph with mandatory `INTENT` and `DERIVED_FROM` fields. Asserted entities are immediately visible to RESOLVE and DISCOVER but carry explicit trust markers — `certified: false`, the asserting agent's identity, the lineage chain back to source entities. This is "rumor with a paper trail," and it is what makes agent-generated knowledge governable.
 
+### Reasoning
+
+**TRACE** — *Provenance history.* Walks AssertionRecords, CertificationRecords, SignalRecords, and `DERIVED_FROM` chains to reconstruct how an entity came to exist and what changed it. Configurable causal depth steps through the lineage chain one hop at a time, and an optional time window filters history events. TRACE is how an agent explains not just what it knows, but *how* it came to know it and why it should be trusted.
+
 ### Governance
 
 **CERTIFY** — *Lifecycle management.* Definitions move through a formal lifecycle: `proposed → under_review → certified → superseded`. Each transition creates an audit record with authority, evidence, and timestamp. After certification, RESOLVE on the entity returns `certified: true` with the certifying authority in the quality envelope. This is how asserted knowledge becomes organizational truth.
 
-### V2 Primitives
+**SIGNAL** — *Quality assessment.* Writes a reputation score update with evidence and creates an immutable `SignalRecord` audit node. Use SIGNAL when data quality changes — a pipeline refreshed, a source went stale, a validation check failed. Unlike CERTIFY, SIGNAL preserves the entity's certification status while updating its reputation, so "certified but currently degraded" is expressible. Every signal is surfaced through TRACE as part of the entity's provenance chain.
 
-Seven further primitives are specified but not yet shipped in this MCP server:
+### Maintenance
 
-- **TRACE** *(Reasoning)* — walks the lineage chain inbound from an entity to return trajectories rather than snapshots: state transitions, actors, triggers.
+**REFRESH** — *Staleness scan.* `CHECK` mode scans every entity visible to the agent and returns those whose freshness exceeds a configurable threshold, sorted most-stale-first. This is a lightweight periodic health check — an agent loop can call REFRESH before answering questions to identify context that needs attention and proactively re-read, re-signal, or escalate it before the staleness silently corrupts downstream reasoning.
+
+### V2 Primitives (Not Yet Shipped)
+
+Four further primitives are specified but not yet shipped in this MCP server:
+
 - **HYPOTHESIZE** *(Reasoning)* — projects outbound effects of an assumed change through the relationship graph with confidence scoring.
 - **COMPARE** *(Reasoning)* — side-by-side comparison of multiple entities, surfacing shared relationships and quality differentials.
 - **ANCHOR** *(Reasoning)* — evaluates the composite confidence of a set of resolved entities as a reasoning chain, returning a weakest-link floor and actionable recommendations.
-- **SIGNAL** *(Governance)* — agents write reputation assessments back into the semantic layer, building a distributed trust network with optional escalation.
-- **REFRESH** *(Maintenance)* — two modes: `CHECK` identifies stale active-context entities; `EXPAND` re-reads a context branch and walks outward to catch peripheral shifts.
 - **AWARENESS** *(Perception)* — ambient perception of other agents operating in scope, their declared intent, and the resources they hold. Enables coordination without explicit messaging.
 
-**This server implements the V1 subset: RESOLVE, DISCOVER, ASSERT, CERTIFY.** The remaining seven primitives are specified in the protocol and ship in V2.
+**This server implements seven primitives: RESOLVE, DISCOVER, ASSERT, CERTIFY, TRACE, SIGNAL, REFRESH.** The remaining four primitives are specified in the protocol and ship in V2.
 
 ## Governance-First Ordering
 
