@@ -15,8 +15,7 @@ defmodule CqrMcp.Resources do
       %{
         "uri" => "cqr://session",
         "name" => "Agent Session",
-        "description" =>
-          "Current agent identity, scope, permissions, and connection metadata",
+        "description" => "Current agent identity, scope, permissions, and connection metadata",
         "mimeType" => "application/json"
       },
       %{
