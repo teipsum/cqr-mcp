@@ -73,7 +73,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Restart Claude Desktop. The tools `cqr_resolve`, `cqr_discover`, `cqr_certify`, and `cqr_assert` appear in the tool picker.
+Restart Claude Desktop. Seven tools appear in the tool picker: `cqr_resolve`, `cqr_discover`, `cqr_certify`, `cqr_assert`, `cqr_trace`, `cqr_signal`, and `cqr_refresh`.
 
 ### Example queries
 
@@ -97,7 +97,7 @@ DISCOVER composes graph traversal, BM25 full-text search, and HNSW vector simila
 
 ## CQR Primitives
 
-CQR defines eleven cognitive operation primitives across five categories. This MCP server implements **four V1 primitives** as MCP tools. The remaining seven primitives are specified in the protocol but ship in V2.
+CQR defines eleven cognitive operation primitives across five categories. This MCP server implements **seven V1 primitives** as MCP tools. The remaining four primitives are specified in the protocol but ship in V2.
 
 ### V1 — Implemented
 
@@ -105,8 +105,11 @@ CQR defines eleven cognitive operation primitives across five categories. This M
 |----------|-----------|-------------|
 | `cqr_resolve` | **RESOLVE** | Canonical entity retrieval with quality metadata and optional freshness/reputation constraints. Walks a scope fallback chain when the primary scope has no authoritative answer. |
 | `cqr_discover` | **DISCOVER** | Neighborhood scan composing graph traversal, BM25 full-text, and HNSW vector similarity. Direction control (`outbound`, `inbound`, `both`) and depth limits. |
-| `cqr_certify` | **CERTIFY** | Governance lifecycle for entity definitions: `proposed → under_review → certified → superseded`. Every transition creates an audit record with authority, evidence, and timestamp. |
 | `cqr_assert` | **ASSERT** | Agent writes uncertified context with mandatory `INTENT` and `DERIVED_FROM` fields. Creates a governance paper trail for agent-generated findings, derived metrics, and working hypotheses. |
+| `cqr_certify` | **CERTIFY** | Governance lifecycle for entity definitions: `proposed → under_review → certified → superseded`. Every transition creates an audit record with authority, evidence, and timestamp. |
+| `cqr_trace` | **TRACE** | Walks the provenance chain of an entity: assertion record, full certification history, signal history, and the `DERIVED_FROM` lineage out to a configurable causal depth. An optional time window filters events. |
+| `cqr_signal` | **SIGNAL** | Writes a reputation assessment with evidence and creates an immutable `SignalRecord` audit node. Preserves certification status so "certified but currently degraded" is expressible. Surfaced through TRACE. |
+| `cqr_refresh` | **REFRESH** | `CHECK` mode scans every entity visible to the agent and returns those exceeding a freshness threshold, sorted most-stale-first. A lightweight periodic health check for agent context. |
 
 ### MCP Resources
 
@@ -122,12 +125,9 @@ CQR defines eleven cognitive operation primitives across five categories. This M
 
 | Primitive | Category | Purpose |
 |-----------|----------|---------|
-| **TRACE** | Reasoning | Temporal and causal reasoning — how did this entity evolve? |
 | **HYPOTHESIZE** | Reasoning | Impact projection — what if this changed? |
 | **COMPARE** | Reasoning | Multi-entity side-by-side analysis |
 | **ANCHOR** | Reasoning | Composite confidence scoring for a set of resolved entities |
-| **SIGNAL** | Governance | Distributed quality feedback — agents flag stale or suspect data |
-| **REFRESH** | Maintenance | Freshness enforcement and peripheral-context re-read |
 | **AWARENESS** | Perception | Ambient awareness of other agents operating in scope |
 
 The full protocol specification is in [`docs/cqr-protocol-specification.md`](docs/cqr-protocol-specification.md).
@@ -140,7 +140,7 @@ Single OS process. Elixir/OTP application with Grafeo (pure-Rust graph DB) embed
 - **OTP supervision tree** — Application supervisor owns the Grafeo server, the scope tree (ETS-cached for sub-millisecond lookups), the MCP transport, and the engine. Fault-tolerant, hot-upgradeable, distributed-ready.
 - **Multi-paradigm query composition** — A single DISCOVER invocation composes Cypher scope traversal, BM25 full-text search, HNSW vector similarity ranking, and application-layer post-scoring against one embedded database.
 - **Governance-first ordering** — Scope traversal constrains the candidate set *before* similarity search and ranking run. This inverts RAG's similarity-first pipeline: predictable result-set sizes, real access control (not post-hoc filtering), and compute efficiency on large corpora.
-- **Adapter behaviour contract** — The engine is backend-agnostic. `Cqr.Adapter.Behaviour` defines `resolve/3`, `discover/3`, `assert/3`, `normalize/2`, `health_check/0`, and `capabilities/0`. Grafeo is the reference adapter. PostgreSQL/pgvector, Neo4j, Elasticsearch, and warehouse backends are a configuration change, not a code change.
+- **Adapter behaviour contract** — The engine is backend-agnostic. `Cqr.Adapter.Behaviour` defines `resolve/3`, `discover/3`, `assert/3`, `trace/3`, `signal/3`, `refresh_check/3`, `normalize/2`, `health_check/0`, and `capabilities/0`. Write callbacks (`assert/3`, `trace/3`, `signal/3`, `refresh_check/3`) are optional — read-only backends declare their capabilities accordingly. Grafeo is the reference adapter. PostgreSQL/pgvector, Neo4j, Elasticsearch, and warehouse backends are a configuration change, not a code change.
 
 Deeper detail in [`docs/architecture.md`](docs/architecture.md).
 
@@ -167,7 +167,7 @@ To add a new adapter, implement `Cqr.Adapter.Behaviour` and register it in appli
 
 ## Roadmap
 
-**V2 primitives** — TRACE, SIGNAL, REFRESH, AWARENESS, COMPARE, HYPOTHESIZE, ANCHOR. The grammar and semantics are specified today; what remains is the adapter and engine work to ship them.
+**V2 primitives** — HYPOTHESIZE, COMPARE, ANCHOR, AWARENESS. The grammar and semantics are specified today; what remains is the adapter and engine work to ship them.
 
 **Platform extensions** — Multi-agent runtime with agent taxonomy and permission intersection, human-agent coupling management, lease-based resource governance, and context contamination prevention are UNICA commercial platform features that consume this server as a building block.
 
