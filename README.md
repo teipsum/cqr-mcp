@@ -167,7 +167,7 @@ To add a new adapter, implement `Cqr.Adapter.Behaviour` and register it in appli
 
 ## License
 
-Business Source License 1.1. Production use is permitted; the only restriction is hosting the Licensed Work as a competing service. The change date is **April 8, 2030**, at which point the license automatically converts to **MIT License** with no restrictions. Full terms in [`LICENSE`](LICENSE). For alternative licensing arrangements, contact `licensing@teipsum.com`.
+Business Source License 1.1. You may make production use of CQR-MCP for your own internal business purposes. You may **not** use it to provide a commercial platform, application, or service to third parties that embeds, hosts, or utilizes CQR-MCP as a backend component for the purpose of a commercial offering. The change date is **April 8, 2030**, at which point the license automatically converts to **MIT License** with no restrictions. Full terms in [`LICENSE`](LICENSE). For alternative licensing arrangements, contact `licensing@teipsum.com`.
 
 ## About
 
