@@ -16,7 +16,8 @@ defmodule CqrMcp.Tools do
       assert_batch_tool(),
       trace_tool(),
       signal_tool(),
-      refresh_tool()
+      refresh_tool(),
+      hypothesize_tool()
     ]
   end
 
@@ -75,6 +76,13 @@ defmodule CqrMcp.Tools do
   def call("cqr_refresh", args, context) do
     expression = build_refresh_expression(args)
     execute_and_format(expression, context)
+  end
+
+  def call("cqr_hypothesize", args, context) do
+    case build_hypothesize_expression(args) do
+      {:ok, expression} -> execute_and_format(expression, context)
+      {:error, error} -> {:error, error}
+    end
   end
 
   def call(name, _args, _context) do
@@ -348,6 +356,50 @@ defmodule CqrMcp.Tools do
           }
         },
         "required" => []
+      }
+    }
+  end
+
+  defp hypothesize_tool do
+    %{
+      "name" => "cqr_hypothesize",
+      "description" =>
+        "Project the downstream effects of an assumed change to an entity. " <>
+          "Walks the relationship and DERIVED_FROM graph outward from the target, " <>
+          "computing a blast radius of entities that would be affected and a " <>
+          "confidence score that decays with each hop. Use this to answer " <>
+          "what-if questions: 'if this metric became unreliable, what else " <>
+          "would I stop trusting?' Returns the hypothetical change, the affected " <>
+          "entities tagged with depth, relationship, hop_confidence and " <>
+          "projected_reputation, and a summary count.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "entity" => %{
+            "type" => "string",
+            "description" => "Entity being hypothesized about (entity:namespace:name)"
+          },
+          "reputation" => %{
+            "type" => "number",
+            "description" =>
+              "Hypothetical new reputation value in [0.0, 1.0]. The delta from " <>
+                "the entity's current reputation propagates outward, scaled by " <>
+                "edge strength and the per-hop decay."
+          },
+          "depth" => %{
+            "type" => "integer",
+            "description" => "Maximum hop distance to walk. Default 2.",
+            "default" => 2
+          },
+          "decay" => %{
+            "type" => "number",
+            "description" =>
+              "Confidence decay multiplier applied per hop, in [0.0, 1.0]. Default 0.7. " <>
+                "Lower values mean confidence falls off faster as the projection " <>
+                "moves away from the source of the hypothesis."
+          }
+        },
+        "required" => ["entity", "reputation"]
       }
     }
   end
@@ -687,10 +739,15 @@ defmodule CqrMcp.Tools do
     end
   end
 
-  defp require_score(args) do
-    case args["score"] do
-      score when is_number(score) -> {:ok, score * 1.0}
-      _ -> {:error, %{"code" => -32_602, "message" => "score must be a number in [0.0, 1.0]"}}
+  defp require_score(args), do: require_score(args, "score")
+
+  defp require_score(args, key) do
+    case args[key] do
+      score when is_number(score) and score >= 0.0 and score <= 1.0 ->
+        {:ok, score * 1.0}
+
+      _ ->
+        {:error, %{"code" => -32_602, "message" => "#{key} must be a number in [0.0, 1.0]"}}
     end
   end
 
@@ -708,6 +765,33 @@ defmodule CqrMcp.Tools do
     parts = parts ++ ["WHERE age > #{threshold}", "RETURN stale_items"]
 
     Enum.join(parts, " ")
+  end
+
+  defp build_hypothesize_expression(args) do
+    with {:ok, entity} <- require_string(args, "entity"),
+         {:ok, reputation} <- require_score(args, "reputation") do
+      parts = [
+        "HYPOTHESIZE #{entity}",
+        "CHANGE reputation TO #{:erlang.float_to_binary(reputation, decimals: 2)}"
+      ]
+
+      parts =
+        case args["depth"] do
+          d when is_integer(d) and d > 0 -> parts ++ ["DEPTH #{d}"]
+          _ -> parts
+        end
+
+      parts =
+        case args["decay"] do
+          d when is_number(d) and d >= 0.0 and d <= 1.0 ->
+            parts ++ ["DECAY #{:erlang.float_to_binary(d * 1.0, decimals: 2)}"]
+
+          _ ->
+            parts
+        end
+
+      {:ok, Enum.join(parts, " ")}
+    end
   end
 
   defp build_certify_expression(args) do
