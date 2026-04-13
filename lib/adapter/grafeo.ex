@@ -15,7 +15,8 @@ defmodule Cqr.Adapter.Grafeo do
   alias Cqr.Repo.Semantic
 
   @impl true
-  def capabilities, do: [:resolve, :discover, :assert, :trace, :signal, :refresh]
+  def capabilities,
+    do: [:resolve, :discover, :assert, :trace, :signal, :refresh, :hypothesize]
 
   @impl true
   def resolve(%Cqr.Resolve{entity: entity} = expression, scope_context, _opts) do
@@ -1179,4 +1180,211 @@ defmodule Cqr.Adapter.Grafeo do
   defp threshold_to_hours({amount, :h}), do: amount
   defp threshold_to_hours({amount, :d}), do: amount * 24
   defp threshold_to_hours({amount, :w}), do: amount * 24 * 7
+
+  # --- HYPOTHESIZE ---
+  #
+  # Walks the relationship graph outward from the target entity using BFS,
+  # capped at `expression.depth` hops. At each hop the projection carries
+  # two pieces of state:
+  #
+  #   * `hop_confidence`     — `decay ** depth`. How much trust to place
+  #                            in this projection given the distance from
+  #                            the source of the hypothesis.
+  #   * `projected_delta`    — `original_delta * hop_confidence * strength`.
+  #                            How the assumed change ripples to this
+  #                            entity along the traversed edge. Edges
+  #                            without a strength are treated as 1.0.
+  #
+  # Both inbound and outbound edges are traversed because relationship
+  # semantics are mixed: `(A)-[:DEPENDS_ON]->(B)` makes A a dependent of
+  # B (inbound from B), while `(A)-[:CAUSES]->(B)` makes B a dependent
+  # of A (outbound from A). The walk does not interpret edge semantics;
+  # it surfaces the path so the agent can reason about it. Each affected
+  # entity is reported once, at the smallest depth it was reached.
+
+  @impl true
+  def hypothesize(%Cqr.Hypothesize{entity: entity} = expression, scope_context, _opts) do
+    visible = scope_context[:visible_scopes] || []
+
+    with {:ok, baseline} <- Semantic.get_entity(entity, visible),
+         change <- primary_change(expression),
+         {:ok, blast_radius} <- walk_blast_radius(entity, expression, visible) do
+      delta = compute_delta(baseline, change)
+      affected = annotate_affected(blast_radius, delta, expression.decay)
+
+      hypothetical_change =
+        change
+        |> Map.put(:original_value, original_value(baseline, change))
+        |> Map.put(:delta, delta)
+
+      row = %{
+        entity: Cqr.Types.format_entity(entity),
+        hypothetical_change: hypothetical_change,
+        depth: expression.depth,
+        decay: expression.decay,
+        blast_radius: affected,
+        summary: summarize(affected, expression.depth)
+      }
+
+      {:ok,
+       %Cqr.Result{
+         data: [row],
+         sources: ["grafeo"],
+         quality: %Cqr.Quality{
+           reputation: baseline[:reputation],
+           owner: baseline[:owner],
+           provenance:
+             "HYPOTHESIZE on #{Cqr.Types.format_entity(entity)} " <>
+               "(#{length(affected)} affected, decay=#{expression.decay})"
+         }
+       }}
+    else
+      {:error, %Cqr.Error{}} = err ->
+        err
+
+      {:error, reason} ->
+        {:error,
+         %Cqr.Error{
+           code: :adapter_error,
+           message: "Grafeo HYPOTHESIZE failed: #{inspect(reason)}"
+         }}
+    end
+  end
+
+  defp primary_change(%Cqr.Hypothesize{changes: [first | _]}), do: first
+
+  defp original_value(baseline, %{field: :reputation}), do: baseline[:reputation]
+  defp original_value(_baseline, _change), do: nil
+
+  defp compute_delta(baseline, %{field: :reputation, value: new}) do
+    case baseline[:reputation] do
+      nil -> 0.0
+      original when is_number(original) -> new - original
+      _ -> 0.0
+    end
+  end
+
+  defp compute_delta(_baseline, _change), do: 0.0
+
+  defp walk_blast_radius({ns, name}, %Cqr.Hypothesize{} = ast, visible) do
+    capped_depth = min(ast.depth, 10)
+    seed = %{key: {ns, name}, depth: 0}
+    walk_loop([seed], MapSet.new([seed.key]), [], 1, capped_depth, visible)
+  end
+
+  defp walk_loop(_frontier, _visited, acc, level, max_depth, _visible) when level > max_depth do
+    {:ok, Enum.reverse(acc)}
+  end
+
+  defp walk_loop([], _visited, acc, _level, _max_depth, _visible) do
+    {:ok, Enum.reverse(acc)}
+  end
+
+  defp walk_loop(frontier, visited, acc, level, max_depth, visible) do
+    case expand_frontier(frontier, visited, level, visible) do
+      {:ok, new_rows, next_frontier, next_visited} ->
+        walk_loop(
+          next_frontier,
+          next_visited,
+          Enum.reverse(new_rows) ++ acc,
+          level + 1,
+          max_depth,
+          visible
+        )
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp expand_frontier(frontier, visited, level, visible) do
+    Enum.reduce_while(frontier, {:ok, [], [], visited}, fn node,
+                                                           {:ok, rows_acc, next_acc, visited_acc} ->
+      case neighbors(node.key, visible) do
+        {:ok, raw_neighbors} ->
+          {new_rows, new_next, new_visited} =
+            absorb_neighbors(raw_neighbors, level, visited_acc)
+
+          {:cont, {:ok, rows_acc ++ new_rows, next_acc ++ new_next, new_visited}}
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rows, next, visited_out} -> {:ok, rows, next, visited_out}
+      other -> other
+    end
+  end
+
+  defp neighbors({ns, name}, visible) do
+    with {:ok, out} <- Semantic.related_entities({ns, name}, 1, visible, nil),
+         {:ok, inb} <- Semantic.related_entities_inbound({ns, name}, 1, visible, nil) do
+      {:ok, out ++ inb}
+    end
+  end
+
+  defp absorb_neighbors(neighbors, level, visited) do
+    Enum.reduce(neighbors, {[], [], visited}, fn neighbor, {rows_acc, next_acc, visited_acc} ->
+      key = neighbor.entity
+
+      if MapSet.member?(visited_acc, key) do
+        {rows_acc, next_acc, visited_acc}
+      else
+        row = %{
+          entity: Cqr.Types.format_entity(key),
+          depth: level,
+          relationship: neighbor.relationship,
+          direction: neighbor.direction,
+          strength: neighbor.strength,
+          current_reputation: neighbor.reputation,
+          type: neighbor.type,
+          owner: neighbor.owner
+        }
+
+        {rows_acc ++ [row], next_acc ++ [%{key: key, depth: level}], MapSet.put(visited_acc, key)}
+      end
+    end)
+  end
+
+  defp annotate_affected(rows, delta, decay) do
+    Enum.map(rows, &annotate_row(&1, delta, decay))
+  end
+
+  defp annotate_row(row, delta, decay) do
+    hop_confidence = :math.pow(decay, row.depth)
+    strength_factor = row.strength || 1.0
+    propagated_delta = delta * hop_confidence * strength_factor
+
+    projected_reputation =
+      case row.current_reputation do
+        nil -> nil
+        current -> clamp(current + propagated_delta)
+      end
+
+    Map.merge(row, %{
+      hop_confidence: hop_confidence,
+      projected_delta: propagated_delta,
+      projected_reputation: projected_reputation
+    })
+  end
+
+  defp clamp(v) when v < 0.0, do: 0.0
+  defp clamp(v) when v > 1.0, do: 1.0
+  defp clamp(v), do: v
+
+  defp summarize([], _max_depth) do
+    %{total_affected: 0, max_depth_reached: 0, mean_hop_confidence: 0.0}
+  end
+
+  defp summarize(rows, _max_depth) do
+    confidences = Enum.map(rows, & &1.hop_confidence)
+    max_depth_reached = rows |> Enum.map(& &1.depth) |> Enum.max(fn -> 0 end)
+
+    %{
+      total_affected: length(rows),
+      max_depth_reached: max_depth_reached,
+      mean_hop_confidence: Enum.sum(confidences) / length(confidences)
+    }
+  end
 end
