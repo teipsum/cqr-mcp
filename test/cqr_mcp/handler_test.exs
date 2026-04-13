@@ -69,13 +69,14 @@ defmodule CqrMcp.HandlerTest do
         })
 
       tools = response["result"]["tools"]
-      assert length(tools) == 7
+      assert length(tools) == 8
 
       names = Enum.map(tools, & &1["name"])
       assert "cqr_resolve" in names
       assert "cqr_discover" in names
       assert "cqr_certify" in names
       assert "cqr_assert" in names
+      assert "cqr_assert_batch" in names
       assert "cqr_trace" in names
       assert "cqr_signal" in names
       assert "cqr_refresh" in names
@@ -383,7 +384,7 @@ defmodule CqrMcp.HandlerTest do
           "method" => "tools/list"
         })
 
-      assert length(r3["result"]["tools"]) == 7
+      assert length(r3["result"]["tools"]) == 8
 
       r4 =
         Handler.handle_request(%{
