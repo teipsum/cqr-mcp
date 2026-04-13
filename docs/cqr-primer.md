@@ -56,6 +56,92 @@ Four further primitives are specified but not yet shipped in this MCP server:
 
 **This server implements seven primitives: RESOLVE, DISCOVER, ASSERT, CERTIFY, TRACE, SIGNAL, REFRESH.** The remaining four primitives are specified in the protocol and ship in V2.
 
+## What the Seven Shipped Primitives Look Like
+
+Each MCP tool wraps a CQR expression. Seeing both forms side by side is the
+fastest way to internalize the grammar. All examples assume an agent operating
+at `scope:company` with access to the sample dataset.
+
+**RESOLVE.** The agent knows the entity by name.
+
+```
+RESOLVE entity:finance:arr FROM scope:company:finance WITH freshness < 24h
+```
+
+MCP call: `cqr_resolve` with `{"entity": "entity:finance:arr", "scope":
+"scope:company:finance", "freshness": "24h"}`.
+
+**DISCOVER.** The agent is orienting.
+
+```
+DISCOVER concepts RELATED TO entity:product:churn_rate DEPTH 2 DIRECTION both
+```
+
+MCP call: `cqr_discover` with `{"topic": "entity:product:churn_rate", "depth": 2,
+"direction": "both"}`. Free-text `topic` (no `entity:` prefix) triggers BM25 +
+HNSW within the visible candidate set.
+
+**ASSERT.** The agent writes a derived finding with mandatory provenance.
+
+```
+ASSERT entity:product:churn_velocity
+  TYPE derived_metric
+  DESCRIPTION "Rate of change in churn_rate over a rolling 30-day window"
+  INTENT "Answer CEO's question about whether churn is accelerating"
+  DERIVED_FROM entity:product:churn_rate, entity:product:nps
+  IN scope:company:product
+  CONFIDENCE 0.7
+```
+
+MCP call: `cqr_assert` with the five required fields (`entity`, `type`,
+`description`, `intent`, `derived_from`) plus optional `scope`, `confidence`,
+and inline typed `relationships`.
+
+**CERTIFY.** A governance lead promotes an asserted definition.
+
+```
+CERTIFY entity:product:churn_velocity STATUS certified
+  AUTHORITY "agent:twin:michael"
+  EVIDENCE "Validated against Q4 cohort data and cross-checked with finance"
+```
+
+MCP call: `cqr_certify` with `{"entity": ..., "status": "certified", "authority":
+"agent:twin:michael", "evidence": "..."}`. Subsequent RESOLVE calls will return
+the entity with `certified: true` in the quality envelope.
+
+**TRACE.** A downstream agent asks "how did this come to be?"
+
+```
+TRACE entity:product:churn_velocity OVER last 30d DEPTH causal:2
+```
+
+MCP call: `cqr_trace` with `{"entity": "entity:product:churn_velocity",
+"time_window": "30d", "depth": 2}`. Returns the assertion record, every
+certification transition, every signal, and the two-hop `DERIVED_FROM` chain.
+
+**SIGNAL.** An agent observes a quality change.
+
+```
+SIGNAL reputation ON entity:product:churn_velocity SCORE 0.35
+  EVIDENCE "Upstream pipeline for churn_rate is 6 days stale"
+```
+
+MCP call: `cqr_signal` with `{"entity": ..., "score": 0.35, "evidence": "..."}`.
+Certification status is preserved; only the reputation score moves. The
+SignalRecord is surfaced on the next TRACE.
+
+**REFRESH.** A scheduled health check.
+
+```
+REFRESH CHECK active_context WITHIN scope:company:product WHERE age > 24h
+  RETURN stale_items
+```
+
+MCP call: `cqr_refresh` with `{"threshold": "24h", "scope":
+"scope:company:product"}`. Returns the stale entity list sorted most-stale-first,
+so the agent loop can re-read, re-signal, or escalate before the staleness
+silently corrupts downstream reasoning.
+
 ## Governance-First Ordering
 
 The single most important architectural decision in CQR is the ordering of operations during a DISCOVER.

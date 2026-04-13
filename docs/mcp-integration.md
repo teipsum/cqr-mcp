@@ -30,6 +30,34 @@ How to connect CQR MCP Server to your MCP client. All examples assume the server
 
 Replace `/path/to/elixir` with the output of `which elixir` and `/path/to/cqr-mcp` with the absolute path to the cloned repository. Restart Claude Desktop after editing the config.
 
+### Using the `cqr` startup script (recommended)
+
+The repo ships a small wrapper at `scripts/cqr` intended to be copied to
+`~/bin/cqr` (or anywhere on your `PATH`). It cleans up any stale BEAM
+processes with SIGTERM first (so persistent-mode Grafeo can checkpoint to
+disk), falls back to SIGKILL only if the process does not exit, and then
+launches the server with a stable `--sname cqr` node name. With the script
+installed, the Claude Desktop config collapses to:
+
+```json
+{
+  "mcpServers": {
+    "cqr": {
+      "command": "/Users/you/bin/cqr",
+      "env": {
+        "CQR_AGENT_ID": "twin:your_name",
+        "CQR_AGENT_SCOPE": "scope:company"
+      }
+    }
+  }
+}
+```
+
+Any flags the script receives are forwarded to `mix run --no-halt -- "$@"`,
+so `"args": ["--persist"]` enables durable storage and `"args": ["--persist",
+"--reset"]` wipes-and-reseeds on the next launch -- no need to change the
+`command` shape.
+
 ### Persistent storage
 
 The configuration above runs in-memory — the sample dataset is seeded on every launch and any data asserted via `cqr_assert` is lost when Claude Desktop restarts. To persist data across restarts, append `--persist` after a `--` separator so Mix forwards it as a script argument:
@@ -78,20 +106,88 @@ Any MCP client that speaks JSON-RPC 2.0 over stdio can connect to CQR. SSE trans
 
 ### Tool schemas
 
-Seven tools are exposed. Full JSON Schema definitions are available via the standard `tools/list` MCP method.
+Seven tools are exposed. Full JSON Schema definitions are available via the
+standard `tools/list` MCP method; the summary below mirrors what
+`lib/cqr_mcp/tools.ex` declares today. Fields marked `(required)` are
+enforced by the server -- missing or empty values produce a structured
+error envelope (JSON-RPC code `-32602`), not a crash.
 
-```
-cqr_resolve(entity, scope?, freshness?, reputation?)
-cqr_discover(topic, scope?, depth?, direction?)
-cqr_certify(entity, status, authority?, evidence?)
-cqr_assert(entity, type, description, intent, derived_from,
-           scope?, confidence?, relationships?)
-cqr_trace(entity, depth?, time_window?)
-cqr_signal(entity, score, evidence)
-cqr_refresh(threshold?, scope?)
-```
+#### `cqr_resolve`
 
-Required fields for each tool are enforced by the server; missing fields produce a structured error envelope rather than a crash.
+Canonical entity retrieval with quality metadata.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `entity` | string | yes | Entity reference, e.g. `entity:finance:arr` |
+| `scope` | string | no | Scope constraint, e.g. `scope:company:finance` |
+| `freshness` | string | no | Max age, e.g. `24h`, `7d`, `30m` |
+| `reputation` | number | no | Minimum reputation `0.0 - 1.0` |
+
+#### `cqr_discover`
+
+Neighborhood scan combining graph traversal, BM25, and HNSW vector search.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `topic` | string | yes | Either `entity:ns:name` or a plain free-text search term (no quotes) |
+| `scope` | string | no | One scope, or comma-separated scopes (`scope:product,scope:finance`) |
+| `depth` | integer | no | Traversal depth, default `2` |
+| `direction` | string | no | `outbound`, `inbound`, or `both` (default) |
+
+#### `cqr_assert`
+
+Agent write with a mandatory `INTENT` and `DERIVED_FROM` paper trail.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `entity` | string | yes | New entity's semantic address |
+| `type` | string | yes | `metric`, `definition`, `policy`, `derived_metric`, `observation`, or `recommendation` |
+| `description` | string | yes | Human-readable description |
+| `intent` | string | yes | Why the agent is asserting this (task context) |
+| `derived_from` | string | yes | Comma-separated `entity:ns:name` source refs |
+| `scope` | string | no | Target scope; defaults to agent's active scope |
+| `confidence` | number | no | Self-assessed confidence `0.0 - 1.0`, default `0.5` |
+| `relationships` | string | no | Comma-separated shorthand `REL:entity:ns:name:strength` (valid `REL` values: `CORRELATES_WITH`, `CONTRIBUTES_TO`, `DEPENDS_ON`, `CAUSES`, `PART_OF`) |
+
+#### `cqr_certify`
+
+Governance lifecycle: `proposed -> under_review -> certified -> superseded`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `entity` | string | yes | Entity to certify |
+| `status` | string | yes | Target status from the four above |
+| `authority` | string | no | Bare identifier (`cfo`) or quoted free-form (`"agent:twin:michael"`) |
+| `evidence` | string | no | Supporting rationale |
+
+#### `cqr_trace`
+
+Walk the provenance chain of an entity.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `entity` | string | yes | Entity to trace |
+| `depth` | integer | no | How many hops to follow `DERIVED_FROM`, default `1` |
+| `time_window` | string | no | Filter events to a window, e.g. `24h`, `7d` |
+
+#### `cqr_signal`
+
+Write a reputation assessment; certification status is preserved.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `entity` | string | yes | Entity to signal |
+| `score` | number | yes | New reputation score `0.0 - 1.0` |
+| `evidence` | string | yes | Rationale for the change |
+
+#### `cqr_refresh`
+
+Staleness scan. `CHECK` mode is the only mode shipped today.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `threshold` | string | no | Staleness threshold, default `24h` |
+| `scope` | string | no | Scope to check; defaults to the agent's full visible set |
 
 ### Resource URIs
 

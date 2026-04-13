@@ -53,6 +53,46 @@ To reset the database and re-seed with sample data:
 
     mix run --no-halt -- --persist --reset
 
+### Populating the knowledge graph
+
+For benchmarking, cognitive testing, or seeding a persistent database with a larger
+corpus than the minimal sample dataset, the repo ships a Mix task:
+
+    mix cqr.populate
+
+This runs ~178 `ASSERT` calls through `Cqr.Engine.execute/2` (the same governance
+pipeline MCP clients hit), so every entity is parsed, scope-validated, and
+embedding-indexed. The task defaults to `~/.cqr/grafeo.grafeo`; pass an explicit
+path to populate a different database file. The MCP server must be stopped first --
+only one process can hold the Grafeo file lock.
+
+### The `cqr` startup script
+
+Claude Desktop config works fine calling `elixir` directly, but a small convenience
+wrapper makes restart-from-anywhere painless. An example script lives at
+`scripts/cqr` and is intended to be copied to `~/bin/cqr`:
+
+```bash
+#!/bin/bash
+# SIGTERM first so Grafeo can checkpoint to disk, then SIGKILL only if needed.
+pkill -TERM -f "beam.smp.*sname.*cqr" 2>/dev/null
+sleep 2
+pkill -9 -f "beam.smp.*sname.*cqr" 2>/dev/null
+sleep 1
+
+cd ~/git/teipsum/cqr-mcp
+export CQR_AGENT_SCOPE="${CQR_AGENT_SCOPE:-scope:company}"
+export CQR_AGENT_ID="${CQR_AGENT_ID:-twin:michael}"
+exec elixir --sname cqr -S mix run --no-halt -- "$@"
+```
+
+The SIGTERM-first / short-wait / SIGKILL pattern matters for persistent mode: the
+Grafeo on-disk format is only guaranteed consistent after a clean close, and a
+plain `pkill -9` skips the checkpoint path. The `--sname cqr` flag gives the BEAM
+a stable name so `pkill` can find it reliably across restarts. With this script on
+your `PATH`, the Claude Desktop config can reference `cqr` directly and forward
+flags like `--persist` transparently.
+
 ### Connect from Claude Desktop
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
@@ -172,6 +212,18 @@ To add a new adapter, implement `Cqr.Adapter.Behaviour` and register it in appli
 **Platform extensions** — Multi-agent runtime with agent taxonomy and permission intersection, human-agent coupling management, lease-based resource governance, and context contamination prevention are UNICA commercial platform features that consume this server as a building block.
 
 **Transport** — stdio is primary. SSE transport for remote MCP connections via Plug/Bandit is planned for V1.1.
+
+## Testing
+
+```bash
+mix test
+```
+
+The suite runs 429 tests in-process against an ephemeral Grafeo database -- no
+Docker, no external services. Every primitive has parser tests, engine tests, and
+an MCP integration test that exercises the full JSON-RPC path. The 95-case
+exhaustive MCP integration suite in `test/cqr_mcp/integration_test.exs` is the
+fastest way to catch regressions across all seven tools after an adapter change.
 
 ## Documentation
 
