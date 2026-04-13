@@ -59,24 +59,27 @@ defmodule Cqr.Repo.Seed do
   def bootstrap_if_empty_direct(db) do
     case Native.execute(db, "MATCH (s:Scope) RETURN count(s)") do
       {:ok, [row]} when map_size(row) > 0 ->
-        [count] = Map.values(row)
-
-        if count == 0 do
-          Logger.info("Empty persistent database — creating scope tree and bootstrap entity")
-
-          with :ok <- seed_scopes(db),
-               :ok <- seed_bootstrap_entity(db) do
-            :ok
-          end
-        else
-          :ok
-        end
+        maybe_seed_empty(db, row)
 
       {:ok, _} ->
         :ok
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp maybe_seed_empty(db, row) do
+    case Map.values(row) do
+      [0] ->
+        Logger.info("Empty persistent database - creating scope tree and bootstrap entity")
+
+        with :ok <- seed_scopes(db) do
+          seed_bootstrap_entity(db)
+        end
+
+      _ ->
+        :ok
     end
   end
 

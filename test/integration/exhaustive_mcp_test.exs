@@ -35,6 +35,7 @@ defmodule Cqr.Integration.ExhaustiveMcpTest do
 
   alias Cqr.Engine
   alias Cqr.Grafeo.Server, as: GrafeoServer
+  alias Cqr.Repo.Semantic, as: RepoSemantic
 
   @company_context %{scope: ["company"], agent_id: "twin:exh_root"}
   @product_context %{scope: ["company", "product"], agent_id: "twin:exh_product"}
@@ -192,7 +193,7 @@ defmodule Cqr.Integration.ExhaustiveMcpTest do
                )
 
       # Validation error fires before any write — no entity, no record.
-      refute Cqr.Repo.Semantic.entity_exists?({"test_exh", "a07_partial"})
+      refute RepoSemantic.entity_exists?({"test_exh", "a07_partial"})
     end
 
     test "A08 non-identifier type fails at parse time" do
@@ -1280,7 +1281,7 @@ defmodule Cqr.Integration.ExhaustiveMcpTest do
       seeded_targets =
         Enum.filter(seeded_targets, fn ref ->
           [_, ns, name] = String.split(ref, ":")
-          Cqr.Repo.Semantic.entity_exists?({ns, name})
+          RepoSemantic.entity_exists?({ns, name})
         end)
 
       derived = asserted_leaves ++ seeded_targets

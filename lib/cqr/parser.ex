@@ -103,43 +103,35 @@ defmodule Cqr.Parser do
     "Expression ended unexpectedly. Check for missing required clauses."
   end
 
+  @keyword_prefixes [
+    {"RESOLV", "RESOLVE"},
+    {"DISCOV", "DISCOVER"},
+    {"CERTIF", "CERTIFY"},
+    {"ASSER", "ASSERT"},
+    {"TRAC", "TRACE"},
+    {"SIGNA", "SIGNAL"},
+    {"REFRES", "REFRESH"},
+    {"AWARENES", "AWARENESS"},
+    {"HYPOTHESIZ", "HYPOTHESIZE"},
+    {"HYPOTH", "HYPOTHESIZE"},
+    {"COMPAR", "COMPARE"},
+    {"ANCHO", "ANCHOR"}
+  ]
+
   defp suggest_fix(rest, _input) do
-    cond do
-      String.starts_with?(rest, "RESOLV") ->
-        "Did you mean RESOLVE?"
-
-      String.starts_with?(rest, "DISCOV") ->
-        "Did you mean DISCOVER?"
-
-      String.starts_with?(rest, "CERTIF") ->
-        "Did you mean CERTIFY?"
-
-      String.starts_with?(rest, "ASSER") ->
-        "Did you mean ASSERT?"
-
-      String.starts_with?(rest, "TRAC") ->
-        "Did you mean TRACE?"
-
-      String.starts_with?(rest, "SIGNA") ->
-        "Did you mean SIGNAL?"
-
-      String.starts_with?(rest, "REFRES") ->
-        "Did you mean REFRESH?"
-
-      String.starts_with?(rest, "AWARENES") ->
-        "Did you mean AWARENESS?"
-
-      String.starts_with?(rest, "HYPOTHESIZ") or String.starts_with?(rest, "HYPOTH") ->
-        "Did you mean HYPOTHESIZE?"
-
-      String.starts_with?(rest, "COMPAR") ->
-        "Did you mean COMPARE?"
-
-      String.starts_with?(rest, "ANCHO") ->
-        "Did you mean ANCHOR?"
-
-      true ->
-        "Expression must start with RESOLVE, DISCOVER, CERTIFY, ASSERT, TRACE, SIGNAL, REFRESH, AWARENESS, HYPOTHESIZE, COMPARE, or ANCHOR. Unexpected: \"#{String.slice(rest, 0, 20)}\""
+    case match_keyword_prefix(rest) do
+      {:ok, keyword} -> "Did you mean #{keyword}?"
+      :error -> unknown_start_message(rest)
     end
+  end
+
+  defp match_keyword_prefix(rest) do
+    Enum.find_value(@keyword_prefixes, :error, fn {prefix, keyword} ->
+      if String.starts_with?(rest, prefix), do: {:ok, keyword}
+    end)
+  end
+
+  defp unknown_start_message(rest) do
+    "Expression must start with RESOLVE, DISCOVER, CERTIFY, ASSERT, TRACE, SIGNAL, REFRESH, AWARENESS, HYPOTHESIZE, COMPARE, or ANCHOR. Unexpected: \"#{String.slice(rest, 0, 20)}\""
   end
 end
