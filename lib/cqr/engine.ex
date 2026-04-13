@@ -15,6 +15,7 @@ defmodule Cqr.Engine do
   """
 
   alias Cqr.Engine.{
+    Anchor,
     Assert,
     Awareness,
     Certify,
@@ -185,6 +186,10 @@ defmodule Cqr.Engine do
 
   defp dispatch(%Cqr.Compare{} = ast, _scope_context, context) do
     Compare.execute(ast, context)
+  end
+
+  defp dispatch(%Cqr.Anchor{} = ast, _scope_context, context) do
+    Anchor.execute(ast, context)
   end
 
   defp dispatch(ast, scope_context, context) do
