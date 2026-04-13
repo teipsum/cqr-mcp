@@ -14,7 +14,7 @@ defmodule Cqr.Engine.Hypothesize do
   on governance and dispatch.
   """
 
-  alias Cqr.Adapter.Grafeo, as: GrafeoAdapter
+  alias Cqr.Engine.Planner
   alias Cqr.Repo.Semantic
 
   @doc """
@@ -29,9 +29,10 @@ defmodule Cqr.Engine.Hypothesize do
     visible = resolve_visible_scopes(context)
     scope_context = %{visible_scopes: visible}
 
-    with {:ok, _} <- validate_changes(ast),
+    with {:ok, adapter} <- Planner.resolve_adapter(context, :hypothesize),
+         {:ok, _} <- validate_changes(ast),
          {:ok, _entity_data} <- fetch_visible_entity(ast.entity, visible) do
-      GrafeoAdapter.hypothesize(ast, scope_context, [])
+      adapter.hypothesize(ast, scope_context, [])
     end
   end
 

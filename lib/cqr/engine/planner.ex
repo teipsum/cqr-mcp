@@ -10,6 +10,40 @@ defmodule Cqr.Engine.Planner do
   @default_adapters [Cqr.Adapter.Grafeo]
 
   @doc """
+  The fallback adapter list used when the engine context does not
+  supply an `:adapters` override. Exposed so the non-planned engine
+  paths (ASSERT, TRACE, SIGNAL, etc.) can share the same default.
+  """
+  def default_adapters, do: @default_adapters
+
+  @doc """
+  Resolve a single adapter for a given capability from the engine
+  context. Returns `{:ok, adapter}` for the first adapter declaring
+  `capability`, or `{:error, %Cqr.Error{}}` if none is applicable.
+
+  Checks `context[:adapters]` first and falls back to
+  `default_adapters/0`. Used by the engine modules whose primitives
+  are not routed through `plan/2` (ASSERT, TRACE, SIGNAL, REFRESH,
+  AWARENESS, HYPOTHESIZE, COMPARE, ANCHOR).
+  """
+  def resolve_adapter(context, capability) when is_atom(capability) do
+    adapters = Map.get(context, :adapters) || @default_adapters
+
+    case Enum.find(adapters, fn adapter -> capability in adapter.capabilities() end) do
+      nil ->
+        {:error,
+         %Cqr.Error{
+           code: :no_adapter,
+           message: "No adapter supports the #{capability} primitive",
+           suggestions: ["Check adapter configuration"]
+         }}
+
+      adapter ->
+        {:ok, adapter}
+    end
+  end
+
+  @doc """
   Plan execution for a parsed AST. Returns a list of
   `{adapter_module, primitive}` tuples to execute.
 

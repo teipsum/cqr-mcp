@@ -20,7 +20,7 @@ defmodule Cqr.Engine.Assert do
   parse relationships independently. The AST value wins when present.
   """
 
-  alias Cqr.Adapter.Grafeo, as: GrafeoAdapter
+  alias Cqr.Engine.Planner
 
   @doc """
   Execute an ASSERT operation.
@@ -36,10 +36,11 @@ defmodule Cqr.Engine.Assert do
     visible = resolve_visible_scopes(context)
     scope_context = %{visible_scopes: visible}
 
-    with :ok <- validate_required_fields(ast),
+    with {:ok, adapter} <- Planner.resolve_adapter(context, :assert),
+         :ok <- validate_required_fields(ast),
          :ok <- validate_confidence(ast.confidence),
          :ok <- validate_relationships(relationships) do
-      GrafeoAdapter.assert(ast, scope_context,
+      adapter.assert(ast, scope_context,
         agent_id: agent_id,
         relationships: relationships
       )

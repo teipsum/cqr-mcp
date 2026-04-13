@@ -12,7 +12,7 @@ defmodule Cqr.Engine.Awareness do
   for issuing AWARENESS.
   """
 
-  alias Cqr.Adapter.Grafeo, as: GrafeoAdapter
+  alias Cqr.Engine.Planner
 
   @doc """
   Execute an AWARENESS scan.
@@ -24,6 +24,8 @@ defmodule Cqr.Engine.Awareness do
     visible = Map.get(context, :visible_scopes, [])
     scope_context = %{visible_scopes: visible}
 
-    GrafeoAdapter.awareness(ast, scope_context, [])
+    with {:ok, adapter} <- Planner.resolve_adapter(context, :awareness) do
+      adapter.awareness(ast, scope_context, [])
+    end
   end
 end

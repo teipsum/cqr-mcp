@@ -14,7 +14,7 @@ defmodule Cqr.Engine.Trace do
   module stays focused on scope validation and dispatch.
   """
 
-  alias Cqr.Adapter.Grafeo, as: GrafeoAdapter
+  alias Cqr.Engine.Planner
   alias Cqr.Repo.Semantic
 
   @doc """
@@ -28,8 +28,9 @@ defmodule Cqr.Engine.Trace do
     visible = resolve_visible_scopes(context)
     scope_context = %{visible_scopes: visible}
 
-    with {:ok, _entity_data} <- fetch_visible_entity(ast.entity, visible) do
-      GrafeoAdapter.trace(ast, scope_context, [])
+    with {:ok, adapter} <- Planner.resolve_adapter(context, :trace),
+         {:ok, _entity_data} <- fetch_visible_entity(ast.entity, visible) do
+      adapter.trace(ast, scope_context, [])
     end
   end
 

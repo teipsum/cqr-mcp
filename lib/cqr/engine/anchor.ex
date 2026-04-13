@@ -31,7 +31,7 @@ defmodule Cqr.Engine.Anchor do
   `Cqr.Repo.Semantic.get_entity/2` for each chain link.
   """
 
-  alias Cqr.Adapter.Grafeo, as: GrafeoAdapter
+  alias Cqr.Engine.Planner
 
   @doc """
   Execute an ANCHOR operation.
@@ -53,7 +53,9 @@ defmodule Cqr.Engine.Anchor do
     visible = resolve_visible_scopes(context)
     scope_context = %{visible_scopes: visible}
 
-    GrafeoAdapter.anchor(ast, scope_context, [])
+    with {:ok, adapter} <- Planner.resolve_adapter(context, :anchor) do
+      adapter.anchor(ast, scope_context, [])
+    end
   end
 
   defp resolve_visible_scopes(context) do

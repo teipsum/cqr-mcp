@@ -17,7 +17,7 @@ defmodule Cqr.Engine.Compare do
   governance boundary remains in the engine.
   """
 
-  alias Cqr.Adapter.Grafeo, as: GrafeoAdapter
+  alias Cqr.Engine.Planner
   alias Cqr.Repo.Semantic
 
   @doc """
@@ -32,10 +32,11 @@ defmodule Cqr.Engine.Compare do
     visible = resolve_visible_scopes(context)
     scope_context = %{visible_scopes: visible}
 
-    with :ok <- validate_entity_count(ast.entities),
+    with {:ok, adapter} <- Planner.resolve_adapter(context, :compare),
+         :ok <- validate_entity_count(ast.entities),
          :ok <- ensure_unique(ast.entities),
          :ok <- ensure_all_visible(ast.entities, visible) do
-      GrafeoAdapter.compare(ast, scope_context, [])
+      adapter.compare(ast, scope_context, [])
     end
   end
 
