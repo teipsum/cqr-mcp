@@ -84,7 +84,7 @@ Persistent mode opens (or creates) `~/.cqr/grafeo.grafeo` and does **not** seed 
 
 Once Claude Desktop reconnects:
 
-1. Open the tool picker. Seven tools appear: `cqr_resolve`, `cqr_discover`, `cqr_certify`, `cqr_assert`, `cqr_trace`, `cqr_signal`, `cqr_refresh`.
+1. Open the tool picker. Thirteen tools appear: `cqr_resolve`, `cqr_discover`, `cqr_assert`, `cqr_assert_batch`, `cqr_certify`, `cqr_signal`, `cqr_update`, `cqr_trace`, `cqr_refresh`, `cqr_compare`, `cqr_hypothesize`, `cqr_anchor`, `cqr_awareness`.
 2. Open the resource browser. The `cqr://session` resource shows the current agent identity, visible scopes, connected adapters, and protocol version.
 3. Ask Claude a grounded question: *"Use cqr_discover to show me what's connected to churn rate."* The tool call, result envelope, and quality metadata should render inline.
 
@@ -106,8 +106,8 @@ Any MCP client that speaks JSON-RPC 2.0 over stdio can connect to CQR. SSE trans
 
 ### Tool schemas
 
-Seven tools are exposed. Full JSON Schema definitions are available via the
-standard `tools/list` MCP method; the summary below mirrors what
+Thirteen tools are exposed. Full JSON Schema definitions are available via
+the standard `tools/list` MCP method; the summary below mirrors what
 `lib/cqr_mcp/tools.ex` declares today. Fields marked `(required)` are
 enforced by the server -- missing or empty values produce a structured
 error envelope (JSON-RPC code `-32602`), not a crash.
@@ -151,14 +151,27 @@ Agent write with a mandatory `INTENT` and `DERIVED_FROM` paper trail.
 
 #### `cqr_certify`
 
-Governance lifecycle: `proposed -> under_review -> certified -> superseded`.
+Governance lifecycle: `proposed -> under_review -> certified -> (contested -> under_review) -> superseded -> proposed`. `contested` is entered automatically when an UPDATE proposes a `redefinition` or `reclassification` on a certified entity; the only transition out of `contested` is back to `under_review`. `superseded` is non-terminal — `CERTIFY STATUS proposed` puts a superseded entity back into the forward lifecycle.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `entity` | string | yes | Entity to certify |
-| `status` | string | yes | Target status from the four above |
+| `status` | string | yes | Target status: `proposed`, `under_review`, `certified`, `contested`, or `superseded` |
 | `authority` | string | no | Bare identifier (`cfo`) or quoted free-form (`"agent:twin:michael"`) |
 | `evidence` | string | no | Supporting rationale |
+
+#### `cqr_update`
+
+Governed content evolution. Writes a `VersionRecord` audit node (linked by `PREVIOUS_VERSION` on apply, or `PENDING_UPDATE` on contest) capturing the prior state. The governance matrix (see `docs/cqr-protocol-specification.md`) decides whether the change applies, transitions the entity to `contested` for pending review, or is blocked.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `entity` | string | yes | Entity to update (`entity:namespace:name`) |
+| `change_type` | string | yes | One of `correction`, `refresh`, `scope_change`, `redefinition`, `reclassification` |
+| `description` | string | no | New description text |
+| `type` | string | no | New entity type identifier |
+| `evidence` | string | no | Rationale for the change; recorded on the VersionRecord |
+| `confidence` | number | no | New confidence score `0.0 - 1.0` |
 
 #### `cqr_trace`
 

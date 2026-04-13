@@ -10,7 +10,7 @@ The native context interaction language of the UNICA platform.
 
 ## Patent Notice
 
-CQR was previously named SEQUR (Semantic Query Resolution). The USPTO provisional patent application was filed under the SEQUR name. All protocol semantics, claims, and architectural properties described in the patent apply to CQR. The rename reflects the protocol's evolution from seven primitives to eleven, and its broader scope as a cognitive operations protocol rather than a purely semantic query language. "C-Q-R" is pronounced like "seeker."
+CQR was previously named SEQUR (Semantic Query Resolution). The USPTO provisional patent application was filed under the SEQUR name. All protocol semantics, claims, and architectural properties described in the patent apply to CQR. The rename reflects the protocol's evolution from seven primitives to twelve, and its broader scope as a cognitive operations protocol rather than a purely semantic query language. "C-Q-R" is pronounced like "seeker."
 
 ---
 
@@ -25,6 +25,7 @@ CQR was previously named SEQUR (Semantic Query Resolution). The USPTO provisiona
    - Context Creation: ASSERT
    - Reasoning: TRACE, HYPOTHESIZE, COMPARE, ANCHOR
    - Governance: SIGNAL, CERTIFY
+   - Evolution: UPDATE
    - Maintenance & Perception: REFRESH, AWARENESS
 6. Scope Model
 7. Standard Return Envelope
@@ -146,7 +147,7 @@ CQR operates over a small, well-defined set of types. Constraining the type syst
 
 ## 5. Cognitive Operation Primitives
 
-CQR defines 11 cognitive operation primitives organized into 5 categories. Each primitive maps to a reasoning pattern that agents actually perform. Optional clauses may appear in any order within each primitive — a deliberate design decision to accommodate the variable ordering tendencies of LLM generation.
+CQR defines 12 cognitive operation primitives organized into 6 categories. Each primitive maps to a reasoning pattern that agents actually perform. Optional clauses may appear in any order within each primitive — a deliberate design decision to accommodate the variable ordering tendencies of LLM generation.
 
 ---
 
@@ -495,12 +496,24 @@ Manages the definition lifecycle through proposal, review, and certification pha
 
 ```
 CERTIFY entity:<namespace>:<name>
-  STATUS proposed | under_review | certified | superseded
+  STATUS proposed | under_review | certified | contested | superseded
   [AUTHORITY <identifier>]
   [EVIDENCE "<description>"]
 ```
 
-**Certification lifecycle:** `proposed → under_review → certified → superseded`
+**Certification lifecycle:**
+
+```
+nil ─► proposed ─► under_review ─► certified ─► contested ─► under_review
+                                       │                          │
+                                       ▼                          ▼
+                                   superseded ──► proposed ──► …
+```
+
+- `proposed → under_review → certified` is the forward path.
+- `certified → contested` is the outcome of an UPDATE proposing a `redefinition` or `reclassification` on a certified entity. The change is deferred to a pending `UpdateRecord` and is not applied until the contest resolves.
+- `contested → under_review` is the only transition out of `contested` — review the pending update, then re-certify or revert.
+- `superseded` is **non-terminal**: `superseded → proposed` allows a retired entity to be revived into the lifecycle. An UPDATE on a superseded entity also revives it in a single step (certification resets to `nil`, reputation resets to 0.5).
 
 The AUTHORITY and EVIDENCE fields accept free-form strings (including colons and other special characters). Each CERTIFY operation creates an audit record with the certifying agent's identity, timestamp, and evidence chain.
 
@@ -537,7 +550,112 @@ After certification, RESOLVE on this entity returns `certified: true` with the c
 
 ---
 
-### Category 5: Maintenance & Perception
+### Category 5: Evolution
+
+#### UPDATE — Governed Knowledge Evolution
+
+Evolves the content of an existing entity while preserving its semantic address. The entity's namespace and name are stable across updates — only description, type, evidence, and confidence may change — so every inbound reference (`DERIVED_FROM`, relationship edges, certification records) remains valid. Every UPDATE writes a `VersionRecord` node linked from the entity by `PREVIOUS_VERSION`, capturing the prior state as an immutable audit snapshot.
+
+**Syntax:**
+
+```
+UPDATE entity:<namespace>:<name>
+  CHANGE_TYPE correction | refresh | scope_change | redefinition | reclassification
+  [DESCRIPTION "<new_description>"]
+  [TYPE <new_entity_type>]
+  [EVIDENCE "<rationale>"]
+  [CONFIDENCE <score>]
+```
+
+**Parameters:**
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| entity | Yes | — | Semantic address of the entity being updated |
+| CHANGE_TYPE | Yes | — | Semantic category of the change (see below) |
+| DESCRIPTION | No | Unchanged | New description text |
+| TYPE | No | Unchanged | New entity type identifier |
+| EVIDENCE | No | — | Rationale for the change; recorded on the VersionRecord |
+| CONFIDENCE | No | Unchanged | New confidence score in `[0.0, 1.0]` |
+
+**Change types:**
+
+| Change type | Meaning |
+|-------------|---------|
+| `correction` | Fix a factual error in the current content |
+| `refresh` | Update to current values without semantic change |
+| `scope_change` | Re-scope without redefinition |
+| `redefinition` | Change the entity's meaning |
+| `reclassification` | Change the entity's type |
+
+**Governance matrix.** The outcome of an UPDATE depends on the entity's current certification status and the requested `change_type`:
+
+| Current status | `correction`, `refresh`, `scope_change` | `redefinition`, `reclassification` |
+|----------------|-----------------------------------------|------------------------------------|
+| `nil` / `proposed` | Apply; preserve certification | Apply; reset certification to `nil` |
+| `under_review` | Apply; preserve certification | **Blocked** — complete the review first |
+| `certified` | Apply; preserve certification | **Contest** — entity transitions to `contested`, a pending `UpdateRecord` is written, change is deferred to governance review |
+| `contested` | Blocked — contest in progress | Blocked — contest in progress |
+| `superseded` | Apply; revive (certification → `nil`, reputation → 0.5) | Apply; revive (certification → `nil`, reputation → 0.5) |
+
+A contested entity rejects all further UPDATEs until the contest resolves (via a `CERTIFY` transition out of `contested → under_review`, then forward).
+
+**VersionRecord schema.** Every UPDATE writes an audit node with the following fields:
+
+```
+VersionRecord {
+  record_id:              <UUIDv4>,
+  entity_namespace:       <string>,
+  entity_name:            <string>,
+  agent_id:               <string>,
+  change_type:            <one of the five above>,
+  evidence:               <string>,
+  status:                 "applied" | "pending_review",
+  previous_description:   <string>,
+  previous_type:          <string>,
+  previous_status:        <string>,
+  previous_reputation:    <float>,
+  previous_confidence:    <float>,
+  proposed_description:   <string>,    # pending_review only
+  proposed_type:          <string>,    # pending_review only
+  proposed_confidence:    <float>,     # pending_review only
+  timestamp:              <ISO 8601>
+}
+```
+
+Applied updates are linked from the entity via `PREVIOUS_VERSION`. Pending contests are linked via `PENDING_UPDATE`; they become `PREVIOUS_VERSION` edges only when the contest resolves and the change is committed.
+
+**Example — Applied correction on a certified entity:**
+
+Intent: "The churn_rate denominator was documented incorrectly — it's rolling 30-day MRR, not ARR."
+
+```
+UPDATE entity:product:churn_rate
+  CHANGE_TYPE correction
+  DESCRIPTION "Customer churn calculated as lost MRR / rolling 30-day MRR"
+  EVIDENCE "Audit surfaced inconsistent denominator against finance standard"
+  CONFIDENCE 0.9
+```
+
+Result: the entity's description is updated, a `VersionRecord` with `status: "applied"` captures the prior description, and certification is preserved.
+
+**Example — Redefinition on a certified entity (deferred to governance):**
+
+Intent: "Churn rate should include expansion downgrades, not just full cancellations."
+
+```
+UPDATE entity:product:churn_rate
+  CHANGE_TYPE redefinition
+  DESCRIPTION "Net revenue churn including cancellations and expansion downgrades"
+  EVIDENCE "Revised definition approved at Q2 revenue ops review"
+  CONFIDENCE 0.8
+```
+
+Result: the entity transitions from `certified` to `contested`. A `VersionRecord` with `status: "pending_review"` captures both the prior state and the proposed change. No DESCRIPTION change is applied to the entity itself. The response carries a pending-review envelope; subsequent UPDATEs are blocked until a governance agent resolves the contest via `CERTIFY … STATUS under_review`.
+
+---
+
+### Category 6: Maintenance & Perception
 
 #### REFRESH — Context Maintenance
 
@@ -674,7 +792,17 @@ CQR is delivered to AI agents through the Model Context Protocol (MCP), an open 
 |----------|--------------|------------|-------------|
 | `cqr_resolve` | RESOLVE | entity, scope, freshness, reputation | Canonical entity retrieval with quality metadata |
 | `cqr_discover` | DISCOVER | topic, depth, direction, scope | Neighborhood scan with direction control |
+| `cqr_assert` | ASSERT | entity, type, description, intent, derived_from, scope, confidence, relationships | Agent write with mandatory INTENT and DERIVED_FROM paper trail |
+| `cqr_assert_batch` | ASSERT (batched) | entities | Batched ASSERT for high-throughput writes |
 | `cqr_certify` | CERTIFY | entity, status, authority, evidence | Governance lifecycle management |
+| `cqr_signal` | SIGNAL | entity, score, evidence | Reputation assessment preserving certification status |
+| `cqr_update` | UPDATE | entity, change_type, description, type, evidence, confidence | Governed content evolution with VersionRecord audit chain |
+| `cqr_trace` | TRACE | entity, depth, time_window | Provenance walk: assertion, certification, signal, version history |
+| `cqr_refresh` | REFRESH | threshold, scope | Staleness scan across visible scopes |
+| `cqr_compare` | COMPARE | entities, attributes, scope | Multi-entity side-by-side analysis |
+| `cqr_hypothesize` | HYPOTHESIZE | entity, change, depth, confidence_threshold | Outbound impact projection |
+| `cqr_anchor` | ANCHOR | entities, confidence_floor | Composite confidence floor for a reasoning chain |
+| `cqr_awareness` | AWARENESS | scope, role | Ambient perception of other agents in scope |
 
 ### Resources
 
@@ -741,7 +869,18 @@ Any storage backend participates in CQR by implementing the adapter behaviour:
 
 - `resolve/3` — canonical retrieval by namespace:name within accessible scopes
 - `discover/3` — graph traversal from anchor entity with direction and depth control
+- `assert/3` — write a governed, uncertified entity with provenance
+- `certify/3` — move an entity through the certification lifecycle
+- `signal/3` — write a reputation assessment with evidence
+- `update/3` — evolve an entity's content with VersionRecord audit chain and governance matrix enforcement
+- `trace/3` — walk the provenance chain of an entity
+- `refresh_check/3` — staleness scan across visible scopes
+- `compare/3`, `hypothesize/3`, `anchor/3` — reasoning callbacks
+- `awareness/3` — ambient agent perception in scope
+- `capabilities/0` — declared primitive coverage used by the planner
 - `health_check/0` — connectivity and version status
+
+Write, evolution, reasoning, and perception callbacks are optional. Read-only or partial backends declare their supported primitives through `capabilities/0` and the engine planner routes around the rest.
 
 The Grafeo adapter is the reference implementation. Additional adapters (PostgreSQL/pgvector, Neo4j, Elasticsearch, TimescaleDB) can be added without modifying the engine — adapter registration is a configuration change, not a code change.
 

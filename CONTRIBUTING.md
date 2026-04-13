@@ -56,7 +56,7 @@ The test suite runs in-process against embedded Grafeo. No Docker, no external d
 mix test --trace
 ```
 
-`--trace` surfaces individual test names and is the recommended mode during development. The full suite should run in under ten seconds on a modern laptop.
+`--trace` surfaces individual test names and is the recommended mode during development. The full suite (561 tests as of the UPDATE primitive shipping) should run in under ten seconds on a modern laptop.
 
 Every capability must ship with tests AND documentation. If it is not tested and documented, it does not exist.
 

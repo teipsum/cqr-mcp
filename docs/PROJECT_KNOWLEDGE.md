@@ -10,9 +10,9 @@ CQR (**Cognitive Query Resolution**) is a declarative query language designed fo
 
 **The core insight:** Existing query languages (SQL, GraphQL, SPARQL, Cypher) are designed for human developers. When AI agents use them, they do so through pre-coded tool calls. CQR flips this — the agent generates the query expression from natural language intent, and the language's primitives correspond to reasoning patterns (resolve a concept, orient in a neighborhood, assert a finding, trace causality, hypothesize impact, ground reasoning, govern definitions) rather than data operations (select, join, filter).
 
-**Naming history.** CQR was previously named **SEQUR** (Semantic Query Resolution). The USPTO provisional patent application was filed under the SEQUR name; all protocol semantics and claims in the patent apply to CQR. The rename reflects the protocol's evolution from seven primitives to eleven and its broader scope as a cognitive operations protocol rather than a purely semantic query language. "C-Q-R" is pronounced "seeker."
+**Naming history.** CQR was previously named **SEQUR** (Semantic Query Resolution). The USPTO provisional patent application was filed under the SEQUR name; all protocol semantics and claims in the patent apply to CQR. The rename reflects the protocol's evolution from seven primitives to twelve and its broader scope as a cognitive operations protocol rather than a purely semantic query language. "C-Q-R" is pronounced "seeker."
 
-**Eleven primitives in five categories:**
+**Twelve primitives in six categories:**
 
 | Category | Primitives |
 |---|---|
@@ -20,9 +20,10 @@ CQR (**Cognitive Query Resolution**) is a declarative query language designed fo
 | Context Creation | ASSERT |
 | Reasoning | TRACE, HYPOTHESIZE, COMPARE, ANCHOR |
 | Governance | SIGNAL, CERTIFY |
+| Evolution | UPDATE |
 | Maintenance & Perception | REFRESH, AWARENESS |
 
-The canonical specification with full grammar, semantics, and examples for all eleven primitives lives in `README.md` at the repository root. This document focuses on the V1 MCP implementation subset.
+The canonical specification with full grammar, semantics, and examples for all twelve primitives lives in `docs/cqr-protocol-specification.md`. This document focuses on the V1 MCP implementation.
 
 **Protocol positioning:** MCP = agent-to-tool, A2A = agent-to-agent, CQR = agent-to-governed-context. CQR is the governance layer above MCP and A2A in the agent protocol stack.
 
@@ -36,7 +37,7 @@ The canonical specification with full grammar, semantics, and examples for all e
 
 1. Embeds Grafeo (pure-Rust graph database) via Rustler NIF — no external database required
 2. Implements the CQR parser, context assembly engine, and scope resolution
-3. Exposes CQR primitives as MCP tools — currently seven: `cqr_resolve`, `cqr_discover`, `cqr_assert`, `cqr_certify`, `cqr_trace`, `cqr_signal`, `cqr_refresh`
+3. Exposes CQR primitives as MCP tools — currently thirteen: `cqr_resolve`, `cqr_discover`, `cqr_assert`, `cqr_assert_batch`, `cqr_certify`, `cqr_signal`, `cqr_update`, `cqr_trace`, `cqr_refresh`, `cqr_compare`, `cqr_hypothesize`, `cqr_anchor`, `cqr_awareness`
 4. Exposes organizational context as MCP resources (scopes, entities, policies, system prompt)
 5. Accepts connections from any MCP client (Claude Desktop, Cursor, VS Code, custom agents)
 6. Enforces scope-first governance on every query
@@ -48,7 +49,7 @@ The canonical specification with full grammar, semantics, and examples for all e
 
 **Patent filing:** Non-provisional patent filed April 9, 2026 (Application 64/034,544), covering the CQR query language, agent generation contract, adapter architecture, and governance invariance boundary.
 
-**What is NOT in this repo:** Multi-agent runtime (agent taxonomy, co-sponsorship, permission intersection), human-agent coupling management, lease-based resource governance, context contamination prevention, COMPARE/HYPOTHESIZE/ANCHOR/AWARENESS primitives. These are UNICA commercial platform features (separate repo, proprietary).
+**What is NOT in this repo:** Multi-agent runtime (agent taxonomy, co-sponsorship, permission intersection), human-agent coupling management, lease-based resource governance, context contamination prevention. These are UNICA commercial platform features (separate repo, proprietary). All twelve CQR primitives (including COMPARE, HYPOTHESIZE, ANCHOR, AWARENESS, and UPDATE) ship in this repository.
 
 ---
 
@@ -135,7 +136,7 @@ Adapters self-declare capabilities (which primitives they support). The engine r
 
 ## 4. CQR Primitives (V1 MCP Scope)
 
-The full protocol defines 11 primitives (see `README.md`). The V1 MCP server in this repo implements **seven**: RESOLVE, DISCOVER, ASSERT, CERTIFY, TRACE, SIGNAL, REFRESH. The remaining four (HYPOTHESIZE, COMPARE, ANCHOR, AWARENESS) are specified in the protocol and ship in V2.
+The full protocol defines 12 primitives. All twelve ship in this repo's MCP server: RESOLVE, DISCOVER, ASSERT, CERTIFY, SIGNAL, UPDATE, TRACE, REFRESH, COMPARE, HYPOTHESIZE, ANCHOR, AWARENESS. See `docs/cqr-protocol-specification.md` for the canonical grammar and semantics.
 
 ### RESOLVE — Canonical Retrieval
 Retrieve a canonical entity by semantic address from the nearest matching scope, with quality metadata.
@@ -475,7 +476,7 @@ These are non-negotiable for every Claude Code session:
 
 | Document | Contains |
 |---|---|
-| `README.md` (root) | **Canonical CQR Protocol Specification v1.0.** All 11 primitives in 5 categories, full grammar, return envelope, error semantics, MCP delivery. The user-facing spec. |
+| `README.md` (root) | **Canonical CQR Protocol Specification v1.0.** All twelve primitives in six categories, full grammar, return envelope, error semantics, MCP delivery. The user-facing spec. |
 | `specs/Assert primitive specification.md` | Detailed ASSERT primitive spec with two-tier trust model and certification lifecycle. GPG-signed for patent evidence. |
 | `docs/MCP-SERVER-PLAN.md` | Full phased build plan (Phases 0-6), risk register, timeline |
 | `docs/UNICA-MVP2-Developer-Tools-Spec.md` | Developer tooling spec (Playground, Schema Builder, Governance Explorer, Generation Lab, Integration Console) |

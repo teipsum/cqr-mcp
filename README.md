@@ -4,7 +4,7 @@
 
 An Elixir/OTP MCP server that gives AI agents scoped, quality-annotated, auditable access to organizational knowledge. Single process. No Docker. No external database. Connects to Claude Desktop, Cursor, or any MCP-compatible client in under ten minutes.
 
-All eleven CQR cognitive primitives ship as MCP tools today, plus a batch-assert throughput tool. Both stdio and SSE transports are live. Precompiled NIFs cover Apple Silicon and Linux (x86_64 and ARM64), so end users do not need a Rust toolchain.
+All twelve CQR cognitive primitives ship as MCP tools today, plus a batch-assert throughput tool. Both stdio and SSE transports are live. Precompiled NIFs cover Apple Silicon and Linux (x86_64 and ARM64), so end users do not need a Rust toolchain.
 
 ---
 
@@ -93,7 +93,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Restart Claude Desktop. Twelve tools appear in the tool picker: `cqr_resolve`, `cqr_discover`, `cqr_assert`, `cqr_assert_batch`, `cqr_certify`, `cqr_signal`, `cqr_trace`, `cqr_refresh`, `cqr_compare`, `cqr_hypothesize`, `cqr_anchor`, and `cqr_awareness`.
+Restart Claude Desktop. Thirteen tools appear in the tool picker: `cqr_resolve`, `cqr_discover`, `cqr_assert`, `cqr_assert_batch`, `cqr_certify`, `cqr_signal`, `cqr_trace`, `cqr_refresh`, `cqr_compare`, `cqr_hypothesize`, `cqr_anchor`, `cqr_awareness`, and `cqr_update`.
 
 ### Connect over SSE
 
@@ -128,16 +128,17 @@ DISCOVER composes graph traversal, BM25 full-text search, and HNSW vector simila
 
 ## CQR Primitives
 
-CQR defines eleven cognitive operation primitives across five categories. All eleven ship as MCP tools in this server, alongside a `cqr_assert_batch` throughput tool for high-volume writes.
+CQR defines twelve cognitive operation primitives across six categories. All twelve ship as MCP tools in this server, alongside a `cqr_assert_batch` throughput tool for high-volume writes.
 
 | MCP Tool | Primitive | Category | Description |
 |----------|-----------|----------|-------------|
 | `cqr_resolve` | **RESOLVE** | Retrieval | Canonical entity retrieval with quality metadata and optional freshness/reputation constraints. Walks a scope fallback chain when the primary scope has no authoritative answer. |
 | `cqr_discover` | **DISCOVER** | Retrieval | Neighborhood scan composing graph traversal, BM25 full-text, and HNSW vector similarity. Direction control (`outbound`, `inbound`, `both`) and depth limits. |
 | `cqr_assert` | **ASSERT** | Governance | Agent writes uncertified context with mandatory `INTENT` and `DERIVED_FROM` fields. Creates a governance paper trail for agent-generated findings, derived metrics, and working hypotheses. |
-| `cqr_certify` | **CERTIFY** | Governance | Lifecycle for entity definitions: `proposed → under_review → certified → superseded`. Every transition creates an audit record with authority, evidence, and timestamp. |
+| `cqr_certify` | **CERTIFY** | Governance | Lifecycle for entity definitions: `proposed → under_review → certified → (contested → under_review) → superseded → proposed`. Every transition creates an audit record; `contested` and `superseded` are non-terminal and can re-enter the lifecycle. |
 | `cqr_signal` | **SIGNAL** | Governance | Writes a reputation assessment with evidence and creates an immutable `SignalRecord` audit node. Preserves certification status so "certified but currently degraded" is expressible. Surfaced through TRACE. |
-| `cqr_trace` | **TRACE** | Provenance | Walks the provenance chain of an entity: assertion record, full certification history, signal history, and the `DERIVED_FROM` lineage out to a configurable causal depth. An optional time window filters events. |
+| `cqr_update` | **UPDATE** | Evolution | Governed knowledge evolution with mandatory change type classification, version history via VersionRecord nodes, and governance matrix enforcement. Preserves semantic address stability while content evolves. |
+| `cqr_trace` | **TRACE** | Provenance | Walks the provenance chain of an entity: assertion record, full certification history, signal history, version history, and the `DERIVED_FROM` lineage out to a configurable causal depth. An optional time window filters events. |
 | `cqr_refresh` | **REFRESH** | Provenance | `CHECK` mode scans every entity visible to the agent and returns those exceeding a freshness threshold, sorted most-stale-first. A lightweight periodic health check for agent context. |
 | `cqr_compare` | **COMPARE** | Reasoning | Side-by-side analysis of multiple entities, surfacing shared relationships, divergent properties, and quality differentials within the agent's visible scope. |
 | `cqr_hypothesize` | **HYPOTHESIZE** | Reasoning | Projects the outbound effects of an assumed change through the relationship graph with confidence scoring. Bounded by causal depth; the relationship graph is not modified. |
@@ -146,7 +147,7 @@ CQR defines eleven cognitive operation primitives across five categories. All el
 
 ### `cqr_assert_batch` — throughput optimization
 
-Beyond the eleven primitives, the server exposes `cqr_assert_batch` for high-volume writes. It accepts an array of entity objects with the same fields as `cqr_assert` and runs each through the full governance pipeline independently — a failure on one does not block the others. The response is a summary (`total`, `created`, `skipped`, `failed`) plus a per-entity result list. Use it when an agent needs to record 10–20 findings at once without paying the per-call LLM token overhead of repeated `cqr_assert` invocations. Governance is identical to single-shot assert; only the wire-level batching differs.
+Beyond the twelve primitives, the server exposes `cqr_assert_batch` for high-volume writes. It accepts an array of entity objects with the same fields as `cqr_assert` and runs each through the full governance pipeline independently — a failure on one does not block the others. The response is a summary (`total`, `created`, `skipped`, `failed`) plus a per-entity result list. Use it when an agent needs to record 10–20 findings at once without paying the per-call LLM token overhead of repeated `cqr_assert` invocations. Governance is identical to single-shot assert; only the wire-level batching differs.
 
 ### MCP Resources
 
@@ -166,7 +167,7 @@ Single OS process. Elixir/OTP application with Grafeo (pure-Rust graph DB) embed
 
 - **Grafeo integration** — Rustler NIF with a narrow surface (`new/1`, `execute/2`, `close/1`, `health_check/0`). All queries go through a GenServer (`Cqr.Grafeo.Server`) that serializes access to the NIF. LPG + RDF, Cypher + GQL, HNSW vector search, BM25 full-text, ACID MVCC — all in a single embedded database.
 - **OTP supervision tree** — Application supervisor owns the Grafeo server, the scope tree (ETS-cached for sub-millisecond lookups), the stdio MCP transport, and the Bandit-hosted SSE transport. Fault-tolerant, hot-upgradeable, distributed-ready.
-- **Adapter behaviour contract** — The engine is backend-agnostic. `Cqr.Adapter.Behaviour` defines a callback per primitive (`resolve/3`, `discover/3`, `assert/3`, `certify/3`, `trace/3`, `signal/3`, `refresh_check/3`, `compare/3`, `hypothesize/3`, `anchor/3`, `awareness/3`) plus `normalize/2`, `health_check/0`, and `capabilities/0`. Write and reasoning callbacks are optional — read-only or partial backends declare their capabilities accordingly.
+- **Adapter behaviour contract** — The engine is backend-agnostic. `Cqr.Adapter.Behaviour` defines a callback per primitive (`resolve/3`, `discover/3`, `assert/3`, `certify/3`, `trace/3`, `signal/3`, `refresh_check/3`, `compare/3`, `hypothesize/3`, `anchor/3`, `awareness/3`, `update/3`) plus `normalize/2`, `health_check/0`, and `capabilities/0`. Write, evolution, and reasoning callbacks are optional — read-only or partial backends declare their capabilities accordingly.
 - **Planner-driven adapter resolution** — `Cqr.Engine.Planner` inspects each registered adapter's `capabilities/0` at request time and routes every primitive (V1 retrieval/governance, V2 reasoning, perception) through the same dispatch path. There is no hardcoded Grafeo branch in the engine — Grafeo is simply the reference adapter the planner happens to find first. PostgreSQL/pgvector, Neo4j, Elasticsearch, and warehouse backends slot in as configuration changes, not code changes.
 - **Multi-paradigm query composition** — A single DISCOVER invocation composes Cypher scope traversal, BM25 full-text search, HNSW vector similarity ranking, and application-layer post-scoring against one embedded database.
 - **Governance-first ordering** — Scope traversal constrains the candidate set *before* similarity search and ranking run. This inverts RAG's similarity-first pipeline: predictable result-set sizes, real access control (not post-hoc filtering), and compute efficiency on large corpora.
@@ -179,6 +180,7 @@ Deeper detail in [`docs/architecture.md`](docs/architecture.md).
 - **Bidirectional visibility.** An agent at a given scope sees itself, all ancestors (fallback chain), and all descendants (owned sub-scopes). Siblings are invisible — `scope:company:finance` cannot see `scope:company:engineering`. Out-of-scope entities return `not_found`, not `access_denied`. Genuine invisibility, not post-hoc filtering.
 - **Quality metadata envelope.** Every response includes freshness, confidence, reputation, owner, lineage, certification status, provenance, and execution cost. The envelope is never optional — missing fields are explicit `:unknown`, never silently dropped.
 - **Two-tier trust.** Context exists in two trust states: *asserted* (agent-written, uncertified, lineage-tracked) and *certified* (approved through the CERTIFY lifecycle). Both are visible; the trust level is explicit metadata, and agents can reason over it.
+- **Governed evolution.** Certified entities are not frozen. UPDATE evolves content while preserving the semantic address, writing a `VersionRecord` audit chain. A governance matrix gates which change types apply immediately, which require a contest (entity transitions to `contested`, change is deferred to a pending `UpdateRecord` for review), and which are blocked outright. Superseded entities can be revived by UPDATE; contested entities reject all updates until the contest resolves.
 - **Governance invariance boundary.** `Cqr.Engine.execute/2` is the single entry point for all CQR operations. Scope validation, quality annotation, conflict preservation, and cost accounting happen at the engine level — below any delivery interface. No MCP tool, REST endpoint, or direct call can bypass them.
 
 ## Configuration
@@ -197,8 +199,9 @@ To add a new adapter, implement `Cqr.Adapter.Behaviour` and register it in appli
 
 ## Roadmap
 
-The eleven-primitive protocol is shipped. What is next:
+The twelve-primitive protocol is shipped. What is next:
 
+- **Contest resolution UI** — An operator workflow to review pending `UpdateRecord`s on contested entities, approve or reject the proposed change, and drive the entity back to `under_review` or `certified`. The governance matrix and audit chain are already in place; this is the human-facing review surface.
 - **Phoenix LiveView interface** — A first-party operator UI for browsing scopes, inspecting provenance chains, reviewing certification queues, and watching live signal traffic. Consumes the same `Cqr.Engine.execute/2` boundary as MCP clients, so governance behaviour is identical.
 - **Cognitive evidence experiments** — Structured benchmarks measuring how scope-bounded retrieval, mandatory quality metadata, and provenance-aware error envelopes change LLM agent behaviour against ungoverned RAG baselines.
 - **Enterprise adapters** — Reference adapters for PostgreSQL/pgvector, Neo4j, Elasticsearch, and warehouse backends (Snowflake, BigQuery). The behaviour contract already supports them; these are configuration-driven implementations.
@@ -210,14 +213,14 @@ The eleven-primitive protocol is shipped. What is next:
 mix test
 ```
 
-The suite runs **538 tests** in-process against an ephemeral Grafeo database — no Docker, no external services. Every primitive has parser tests, engine tests, and an MCP integration test that exercises the full JSON-RPC path. The exhaustive MCP integration suite in `test/cqr_mcp/integration_test.exs` is the fastest way to catch regressions across all twelve tools after an adapter or planner change.
+The suite runs **561 tests** in-process against an ephemeral Grafeo database — no Docker, no external services. Every primitive has parser tests, engine tests, and an MCP integration test that exercises the full JSON-RPC path. The exhaustive MCP integration suite in `test/cqr_mcp/integration_test.exs` is the fastest way to catch regressions across all thirteen tools after an adapter or planner change.
 
 ## Documentation
 
 - [`docs/cqr-primer.md`](docs/cqr-primer.md) — What CQR is and why it exists (read first)
 - [`docs/architecture.md`](docs/architecture.md) — How the system is built
 - [`docs/mcp-integration.md`](docs/mcp-integration.md) — Connecting Claude Desktop, Cursor, and custom MCP clients
-- [`docs/cqr-protocol-specification.md`](docs/cqr-protocol-specification.md) — Full protocol specification v1.0 with all eleven primitives
+- [`docs/cqr-protocol-specification.md`](docs/cqr-protocol-specification.md) — Full protocol specification v1.0 with all twelve primitives
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — Development setup and contribution workflow
 
 ## License
@@ -226,4 +229,4 @@ Business Source License 1.1. You may make production use of CQR-MCP for your own
 
 ## About
 
-CQR is developed by **TEIPSUM** — *"Uniquely Yourself."* The protocol was previously named SEQUR (Semantic Query Resolution); the USPTO provisional patent application was filed under the SEQUR name and all protocol claims apply to CQR. The rename reflects the protocol's evolution from seven primitives to eleven and its broader scope as a cognitive operations protocol rather than a purely semantic query language.
+CQR is developed by **TEIPSUM** — *"Uniquely Yourself."* The protocol was previously named SEQUR (Semantic Query Resolution); the USPTO provisional patent application was filed under the SEQUR name and all protocol claims apply to CQR. The rename reflects the protocol's evolution from seven primitives to twelve and its broader scope as a cognitive operations protocol rather than a purely semantic query language.

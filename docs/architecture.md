@@ -131,9 +131,9 @@ The critical design choice is the **ordering**: stage 1 runs first and constrain
 
 ## 4. Primitive Implementations
 
-Seven primitives ship in V1 as MCP tools. Each one maps to an adapter callback
-and a path through `Cqr.Engine.execute/2`; the engine sees them uniformly but
-the shape of the work behind each differs.
+Twelve primitives ship as MCP tools. Each one maps to an adapter callback and
+a path through `Cqr.Engine.execute/2`; the engine sees them uniformly but the
+shape of the work behind each differs.
 
 - **RESOLVE** -- Cypher point-lookup in the visible scope set. Walks the
   scope fallback chain when the primary scope has no authoritative answer.
@@ -153,11 +153,17 @@ the shape of the work behind each differs.
   `CONTRIBUTES_TO`, `DEPENDS_ON`, `CAUSES`, `PART_OF`).
 
 - **CERTIFY** -- Moves an entity through `proposed -> under_review ->
-  certified -> superseded`. Each transition writes a `CertificationRecord`
-  audit node with authority and evidence; the entity's current status is
-  denormalized onto the node for cheap RESOLVE-time reads. Invalid
-  transitions return `:invalid_transition` with the current status and the
-  valid next states in the error envelope.
+  certified -> (contested -> under_review) -> superseded -> proposed`.
+  `contested` is entered when an UPDATE proposes a `redefinition` or
+  `reclassification` on a certified entity; the change is deferred until
+  the contest resolves (`contested -> under_review`). `superseded` is
+  non-terminal -- an UPDATE revives a superseded entity in a single step,
+  and `CERTIFY STATUS proposed` puts it back into the forward lifecycle.
+  Each transition writes a `CertificationRecord` audit node with authority
+  and evidence; the entity's current status is denormalized onto the node
+  for cheap RESOLVE-time reads. Invalid transitions return
+  `:invalid_transition` with the current status and the valid next states
+  in the error envelope.
 
 - **TRACE** -- Walks the provenance chain of an entity. Collects the
   `AssertionRecord`, the full `CertificationRecord` history, the
@@ -181,9 +187,34 @@ the shape of the work behind each differs.
   respects the agent's `visible_scopes` set, so a company-wide sweep and a
   finance-team sweep return disjoint stale lists against the same database.
 
-V2 primitives (HYPOTHESIZE, COMPARE, ANCHOR, AWARENESS) are specified in the
-protocol but not yet implemented; their adapter callbacks are not in the
-current `Cqr.Adapter.Behaviour`.
+- **UPDATE** -- Evolves the content of an existing entity while preserving
+  its semantic address. Every UPDATE writes a `VersionRecord` audit node
+  (applied updates link by `PREVIOUS_VERSION`, pending contests link by
+  `PENDING_UPDATE`). The `Cqr.Engine.Update` governance matrix gates the
+  outcome on the tuple of `(current_certification_status, change_type)`:
+  corrections/refreshes/scope-changes on certified entities apply and
+  preserve certification; semantic changes (`redefinition`,
+  `reclassification`) on a certified entity transition the entity to
+  `contested` and defer the change to a pending `UpdateRecord` for
+  governance review. Contested entities reject all UPDATEs until the
+  contest resolves. Superseded entities are revived (certification reset
+  to `nil`, reputation reset to 0.5) by any UPDATE.
+
+- **COMPARE** -- Side-by-side analysis of multiple entities, surfacing
+  shared relationships, divergent properties, and quality differentials
+  within the agent's visible scope.
+
+- **HYPOTHESIZE** -- Projects the outbound effects of an assumed change
+  through the relationship graph with confidence scoring. Bounded by
+  causal depth; the relationship graph is not modified.
+
+- **ANCHOR** -- Composite confidence scoring across a set of resolved
+  entities treated as a reasoning chain. Returns a weakest-link floor and
+  actionable recommendations for the entities dragging the chain down.
+
+- **AWARENESS** -- Ambient perception of the other agents operating in
+  the visible scope set, their declared intent, and the resources they
+  hold. Enables coordination without explicit messaging.
 
 ## 5. Adapter Behaviour Contract
 
@@ -193,15 +224,21 @@ current `Cqr.Adapter.Behaviour`.
 @callback resolve(expression, scope_context, opts)        :: {:ok, term} | {:error, term}
 @callback discover(expression, scope_context, opts)       :: {:ok, term} | {:error, term}
 @callback assert(expression, scope_context, opts)         :: {:ok, term} | {:error, term}
-@callback trace(expression, scope_context, opts)          :: {:ok, term} | {:error, term}
+@callback certify(expression, scope_context, opts)        :: {:ok, term} | {:error, term}
 @callback signal(expression, scope_context, opts)         :: {:ok, term} | {:error, term}
+@callback update(expression, scope_context, opts)         :: {:ok, term} | {:error, term}
+@callback trace(expression, scope_context, opts)          :: {:ok, term} | {:error, term}
 @callback refresh_check(expression, scope_context, opts)  :: {:ok, term} | {:error, term}
+@callback compare(expression, scope_context, opts)        :: {:ok, term} | {:error, term}
+@callback hypothesize(expression, scope_context, opts)    :: {:ok, term} | {:error, term}
+@callback anchor(expression, scope_context, opts)         :: {:ok, term} | {:error, term}
+@callback awareness(expression, scope_context, opts)      :: {:ok, term} | {:error, term}
 @callback normalize(raw_results, metadata)                :: term
 @callback health_check()                                  :: :ok | {:error, term}
 @callback capabilities()                                  :: [atom]
 ```
 
-`assert/3`, `trace/3`, `signal/3`, and `refresh_check/3` are optional callbacks — backends that only support reads declare their capabilities accordingly and the engine planner skips them for operations they do not implement.
+Every non-`resolve`/`discover` callback is optional. Backends that only support reads — or support only a subset of writes, evolution, reasoning, or perception — declare what they implement through `capabilities/0` and the engine planner skips them for operations they do not implement. The Grafeo reference adapter implements every callback.
 
 The engine's `Planner` inspects each adapter's `capabilities/0` and routes expressions only to adapters that can handle them. Multi-adapter deployments fan out concurrently via `Task.async_stream` with a 30-second timeout; results are merged with explicit conflict preservation — if two adapters return different values for the same entity, both are returned with source attribution rather than one being silently picked.
 
