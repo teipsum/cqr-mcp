@@ -36,7 +36,7 @@ jobs:
         nif: ["2.16"]
         job:
           - { target: aarch64-apple-darwin,      os: macos-14 }
-          - { target: x86_64-apple-darwin,       os: macos-14 }
+          - { target: x86_64-apple-darwin,       os: macos-13 }
           - { target: x86_64-unknown-linux-gnu,  os: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, use-cross: true }
 
@@ -47,7 +47,7 @@ jobs:
       - name: Extract project version
         shell: bash
         run: |
-          echo "PROJECT_VERSION=$(sed -n 's/^      version: "\(.*\)",/\1/p' mix.exs | head -n1)" >> "$GITHUB_ENV"
+          echo "PROJECT_VERSION=$(awk -F'"' '/^  @version / { print $2; exit }' mix.exs)" >> "$GITHUB_ENV"
 
       - name: Build the NIF
         id: build-crate
