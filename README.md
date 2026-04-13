@@ -4,6 +4,8 @@
 
 An Elixir/OTP MCP server that gives AI agents scoped, quality-annotated, auditable access to organizational knowledge. Single process. No Docker. No external database. Connects to Claude Desktop, Cursor, or any MCP-compatible client in under ten minutes.
 
+All eleven CQR cognitive primitives ship as MCP tools today, plus a batch-assert throughput tool. Both stdio and SSE transports are live. Precompiled NIFs cover Apple Silicon and Linux (x86_64 and ARM64), so end users do not need a Rust toolchain.
+
 ---
 
 ## The Problem
@@ -32,57 +34,45 @@ Ten minutes, zero external dependencies.
 git clone https://github.com/teipsum/cqr-mcp.git
 cd cqr-mcp
 mix deps.get
-./bin/cqr
+./bin/cqr --persist
 ```
 
-On first boot the embedded Grafeo database is created in-memory, a sample organizational dataset (6 scopes, 27 entities, 17 typed relationships) is seeded, and the server begins listening on stdio for MCP connections.
+On first boot the embedded Grafeo database is created, the scope hierarchy is bootstrapped, and the server begins listening on stdio for MCP connections and on `http://localhost:4000` for SSE/HTTP clients.
 
-### Persistent storage
+### Precompiled NIFs
 
-By default the server runs in-memory with sample data — every restart is a fresh database.
-To persist data across restarts:
+The Grafeo NIF is shipped as a precompiled binary via [`rustler_precompiled`](https://hex.pm/packages/rustler_precompiled). Apple Silicon (`aarch64-apple-darwin`), Linux x86_64, and Linux ARM64 users get a ready-to-run binary on `mix deps.get` — no Rust toolchain required. Other targets fall back to building from source; install Rust via [rustup](https://rustup.rs/) and set `CQR_BUILD_NIF=true` if you need to rebuild from source on a supported target.
 
-    ./bin/cqr --persist
+### Storage modes
 
-Data is stored at `~/.cqr/grafeo.grafeo`. Persistent mode starts with an empty database —
-populate it with `cqr_assert` or adapter imports. To use a custom path:
+The server has two modes:
 
-    ./bin/cqr --persist /path/to/db
+    ./bin/cqr            # in-memory mode, sample dataset seeded fresh on each boot
+    ./bin/cqr --persist  # persistent mode, ~/.cqr/grafeo.grafeo, survives restarts
 
-To reset the database and re-seed with sample data:
+In-memory mode is the fastest path to seeing the protocol work — every restart is a clean database with the sample organizational dataset (6 scopes, 27 entities, typed relationships) seeded for you. Persistent mode is for real organizational data; it starts with an empty database (scope hierarchy bootstrapped, no sample entities) so you can populate it via `cqr_assert`, adapter imports, or `mix cqr.populate`.
+
+To use a custom database path:
+
+    ./bin/cqr --persist /path/to/db.grafeo
+
+To wipe a persistent database and re-seed the sample dataset:
 
     ./bin/cqr --persist --reset
 
+The `.grafeo` extension is load-bearing — Grafeo dispatches on it to select the SingleFile storage backend. Anything else silently falls through to a different backend and fails to persist.
+
 ### Populating the knowledge graph
 
-For benchmarking, cognitive testing, or seeding a persistent database with a larger
-corpus than the minimal sample dataset, the repo ships a Mix task:
+For benchmarking, cognitive testing, or seeding a persistent database with a larger corpus than the minimal sample dataset, the repo ships a Mix task:
 
     mix cqr.populate
 
-This runs ~178 `ASSERT` calls through `Cqr.Engine.execute/2` (the same governance
-pipeline MCP clients hit), so every entity is parsed, scope-validated, and
-embedding-indexed. The task defaults to `~/.cqr/grafeo.grafeo`; pass an explicit
-path to populate a different database file. The MCP server must be stopped first --
-only one process can hold the Grafeo file lock.
+This runs ~178 `ASSERT` calls through `Cqr.Engine.execute/2` (the same governance pipeline MCP clients hit), so every entity is parsed, scope-validated, and embedding-indexed. The task defaults to `~/.cqr/grafeo.grafeo`; pass an explicit path to populate a different database file. The MCP server must be stopped first — only one process can hold the Grafeo file lock.
 
 ### The `bin/cqr` startup script
 
-The repo ships a launcher at `bin/cqr` that handles graceful restart, environment
-defaults, and stdio-safe pre-compilation. Call it directly from the repo root or
-symlink it onto your `PATH`:
-
-    ./bin/cqr            # in-memory mode
-    ./bin/cqr --persist  # persistent mode, args forward through
-
-The SIGTERM-first / short-wait / SIGKILL pattern in the script matters for
-persistent mode: the Grafeo on-disk format is only guaranteed consistent after a
-clean close, and a plain `pkill -9` skips the checkpoint path. The `--sname cqr`
-flag gives the BEAM a stable node name so `pkill` can find it reliably across
-restarts and so only one instance runs at a time. Pre-compilation is silenced
-because MCP speaks JSON-RPC over stdio — compiler chatter would corrupt the
-protocol stream. With `bin/cqr` on your `PATH`, the Claude Desktop config can
-reference `cqr` directly and forward flags like `--persist` transparently.
+The repo ships a launcher at `bin/cqr` that handles graceful restart, environment defaults, and stdio-safe pre-compilation. Call it directly from the repo root or symlink it onto your `PATH`. The SIGTERM-first / short-wait / SIGKILL pattern in the script matters for persistent mode: the Grafeo on-disk format is only guaranteed consistent after a clean close, and a plain `pkill -9` skips the checkpoint path. The `--sname cqr` flag gives the BEAM a stable node name so `pkill` can find it reliably across restarts and so only one instance runs at a time. Pre-compilation is silenced because MCP speaks JSON-RPC over stdio — compiler chatter would corrupt the protocol stream.
 
 ### Connect from Claude Desktop
 
@@ -92,9 +82,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 {
   "mcpServers": {
     "cqr": {
-      "command": "/path/to/elixir",
-      "args": ["--sname", "cqr", "-S", "mix", "run", "--no-halt"],
-      "cwd": "/path/to/cqr-mcp",
+      "command": "/absolute/path/to/cqr-mcp/bin/cqr",
+      "args": ["--persist"],
       "env": {
         "CQR_AGENT_ID": "twin:your_name",
         "CQR_AGENT_SCOPE": "scope:company"
@@ -104,7 +93,16 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Restart Claude Desktop. Seven tools appear in the tool picker: `cqr_resolve`, `cqr_discover`, `cqr_certify`, `cqr_assert`, `cqr_trace`, `cqr_signal`, and `cqr_refresh`.
+Restart Claude Desktop. Twelve tools appear in the tool picker: `cqr_resolve`, `cqr_discover`, `cqr_assert`, `cqr_assert_batch`, `cqr_certify`, `cqr_signal`, `cqr_trace`, `cqr_refresh`, `cqr_compare`, `cqr_hypothesize`, `cqr_anchor`, and `cqr_awareness`.
+
+### Connect over SSE
+
+For browser-based MCP clients, remote agents, or anything that cannot speak stdio, the server also exposes an HTTP/SSE transport on `http://localhost:4000`:
+
+- `GET /sse` — long-lived Server-Sent Events stream. The initial event points clients at the JSON-RPC endpoint and the connection is held open with 15-second keep-alive comments.
+- `POST /message` — JSON-RPC 2.0 request/response. Shares the same handler pipeline as stdio, so tools and resources behave identically across transports.
+
+Override the port with the `CQR_MCP_PORT` environment variable, or set `:cqr_mcp, :sse_port` in config. Default is `4000`.
 
 ### Example queries
 
@@ -124,23 +122,31 @@ CQR resolves the canonical entity within the agent's scope and returns the value
 
 DISCOVER composes graph traversal, BM25 full-text search, and HNSW vector similarity against the embedded database — governance-first, so scope constraints apply before the search runs. The result is a neighborhood map of typed relationships with reputation scores.
 
+**Multi-entity comparison.** Ask: *"How do these two metrics differ?"* The agent calls `cqr_compare` with a list of entities. The tool returns shared relationships, divergent properties, and quality differentials side-by-side.
+
 **Scope boundary enforcement.** If an agent at `scope:company:product` tries to resolve an entity in `scope:company:hr`, CQR does not return an access-denied error. It returns a structured `scope_access` error with suggested visible scopes — errors are data the agent can reason over, not exceptions.
 
 ## CQR Primitives
 
-CQR defines eleven cognitive operation primitives across five categories. This MCP server implements **seven V1 primitives** as MCP tools. The remaining four primitives are specified in the protocol but ship in V2.
+CQR defines eleven cognitive operation primitives across five categories. All eleven ship as MCP tools in this server, alongside a `cqr_assert_batch` throughput tool for high-volume writes.
 
-### V1 — Implemented
+| MCP Tool | Primitive | Category | Description |
+|----------|-----------|----------|-------------|
+| `cqr_resolve` | **RESOLVE** | Retrieval | Canonical entity retrieval with quality metadata and optional freshness/reputation constraints. Walks a scope fallback chain when the primary scope has no authoritative answer. |
+| `cqr_discover` | **DISCOVER** | Retrieval | Neighborhood scan composing graph traversal, BM25 full-text, and HNSW vector similarity. Direction control (`outbound`, `inbound`, `both`) and depth limits. |
+| `cqr_assert` | **ASSERT** | Governance | Agent writes uncertified context with mandatory `INTENT` and `DERIVED_FROM` fields. Creates a governance paper trail for agent-generated findings, derived metrics, and working hypotheses. |
+| `cqr_certify` | **CERTIFY** | Governance | Lifecycle for entity definitions: `proposed → under_review → certified → superseded`. Every transition creates an audit record with authority, evidence, and timestamp. |
+| `cqr_signal` | **SIGNAL** | Governance | Writes a reputation assessment with evidence and creates an immutable `SignalRecord` audit node. Preserves certification status so "certified but currently degraded" is expressible. Surfaced through TRACE. |
+| `cqr_trace` | **TRACE** | Provenance | Walks the provenance chain of an entity: assertion record, full certification history, signal history, and the `DERIVED_FROM` lineage out to a configurable causal depth. An optional time window filters events. |
+| `cqr_refresh` | **REFRESH** | Provenance | `CHECK` mode scans every entity visible to the agent and returns those exceeding a freshness threshold, sorted most-stale-first. A lightweight periodic health check for agent context. |
+| `cqr_compare` | **COMPARE** | Reasoning | Side-by-side analysis of multiple entities, surfacing shared relationships, divergent properties, and quality differentials within the agent's visible scope. |
+| `cqr_hypothesize` | **HYPOTHESIZE** | Reasoning | Projects the outbound effects of an assumed change through the relationship graph with confidence scoring. Bounded by causal depth; the relationship graph is not modified. |
+| `cqr_anchor` | **ANCHOR** | Reasoning | Composite confidence scoring across a set of resolved entities treated as a reasoning chain. Returns a weakest-link floor and actionable recommendations for the entities dragging the chain down. |
+| `cqr_awareness` | **AWARENESS** | Perception | Ambient perception of other agents operating in the visible scope set, their declared intent, and the resources they hold. Enables coordination without explicit messaging. |
 
-| MCP Tool | Primitive | Description |
-|----------|-----------|-------------|
-| `cqr_resolve` | **RESOLVE** | Canonical entity retrieval with quality metadata and optional freshness/reputation constraints. Walks a scope fallback chain when the primary scope has no authoritative answer. |
-| `cqr_discover` | **DISCOVER** | Neighborhood scan composing graph traversal, BM25 full-text, and HNSW vector similarity. Direction control (`outbound`, `inbound`, `both`) and depth limits. |
-| `cqr_assert` | **ASSERT** | Agent writes uncertified context with mandatory `INTENT` and `DERIVED_FROM` fields. Creates a governance paper trail for agent-generated findings, derived metrics, and working hypotheses. |
-| `cqr_certify` | **CERTIFY** | Governance lifecycle for entity definitions: `proposed → under_review → certified → superseded`. Every transition creates an audit record with authority, evidence, and timestamp. |
-| `cqr_trace` | **TRACE** | Walks the provenance chain of an entity: assertion record, full certification history, signal history, and the `DERIVED_FROM` lineage out to a configurable causal depth. An optional time window filters events. |
-| `cqr_signal` | **SIGNAL** | Writes a reputation assessment with evidence and creates an immutable `SignalRecord` audit node. Preserves certification status so "certified but currently degraded" is expressible. Surfaced through TRACE. |
-| `cqr_refresh` | **REFRESH** | `CHECK` mode scans every entity visible to the agent and returns those exceeding a freshness threshold, sorted most-stale-first. A lightweight periodic health check for agent context. |
+### `cqr_assert_batch` — throughput optimization
+
+Beyond the eleven primitives, the server exposes `cqr_assert_batch` for high-volume writes. It accepts an array of entity objects with the same fields as `cqr_assert` and runs each through the full governance pipeline independently — a failure on one does not block the others. The response is a summary (`total`, `created`, `skipped`, `failed`) plus a per-entity result list. Use it when an agent needs to record 10–20 findings at once without paying the per-call LLM token overhead of repeated `cqr_assert` invocations. Governance is identical to single-shot assert; only the wire-level batching differs.
 
 ### MCP Resources
 
@@ -152,15 +158,6 @@ CQR defines eleven cognitive operation primitives across five categories. This M
 | `cqr://policies` | Governance rules per scope |
 | `cqr://system_prompt` | Agent generation contract — the grammar reference, active schema, and few-shot examples that teach an LLM to generate CQR expressions |
 
-### V2 — Specified, Not Yet Shipped
-
-| Primitive | Category | Purpose |
-|-----------|----------|---------|
-| **HYPOTHESIZE** | Reasoning | Impact projection — what if this changed? |
-| **COMPARE** | Reasoning | Multi-entity side-by-side analysis |
-| **ANCHOR** | Reasoning | Composite confidence scoring for a set of resolved entities |
-| **AWARENESS** | Perception | Ambient awareness of other agents operating in scope |
-
 The full protocol specification is in [`docs/cqr-protocol-specification.md`](docs/cqr-protocol-specification.md).
 
 ## Architecture
@@ -168,10 +165,11 @@ The full protocol specification is in [`docs/cqr-protocol-specification.md`](doc
 Single OS process. Elixir/OTP application with Grafeo (pure-Rust graph DB) embedded via Rustler NIF. No separate database container, no network hop between engine and storage.
 
 - **Grafeo integration** — Rustler NIF with a narrow surface (`new/1`, `execute/2`, `close/1`, `health_check/0`). All queries go through a GenServer (`Cqr.Grafeo.Server`) that serializes access to the NIF. LPG + RDF, Cypher + GQL, HNSW vector search, BM25 full-text, ACID MVCC — all in a single embedded database.
-- **OTP supervision tree** — Application supervisor owns the Grafeo server, the scope tree (ETS-cached for sub-millisecond lookups), the MCP transport, and the engine. Fault-tolerant, hot-upgradeable, distributed-ready.
+- **OTP supervision tree** — Application supervisor owns the Grafeo server, the scope tree (ETS-cached for sub-millisecond lookups), the stdio MCP transport, and the Bandit-hosted SSE transport. Fault-tolerant, hot-upgradeable, distributed-ready.
+- **Adapter behaviour contract** — The engine is backend-agnostic. `Cqr.Adapter.Behaviour` defines a callback per primitive (`resolve/3`, `discover/3`, `assert/3`, `certify/3`, `trace/3`, `signal/3`, `refresh_check/3`, `compare/3`, `hypothesize/3`, `anchor/3`, `awareness/3`) plus `normalize/2`, `health_check/0`, and `capabilities/0`. Write and reasoning callbacks are optional — read-only or partial backends declare their capabilities accordingly.
+- **Planner-driven adapter resolution** — `Cqr.Engine.Planner` inspects each registered adapter's `capabilities/0` at request time and routes every primitive (V1 retrieval/governance, V2 reasoning, perception) through the same dispatch path. There is no hardcoded Grafeo branch in the engine — Grafeo is simply the reference adapter the planner happens to find first. PostgreSQL/pgvector, Neo4j, Elasticsearch, and warehouse backends slot in as configuration changes, not code changes.
 - **Multi-paradigm query composition** — A single DISCOVER invocation composes Cypher scope traversal, BM25 full-text search, HNSW vector similarity ranking, and application-layer post-scoring against one embedded database.
 - **Governance-first ordering** — Scope traversal constrains the candidate set *before* similarity search and ranking run. This inverts RAG's similarity-first pipeline: predictable result-set sizes, real access control (not post-hoc filtering), and compute efficiency on large corpora.
-- **Adapter behaviour contract** — The engine is backend-agnostic. `Cqr.Adapter.Behaviour` defines `resolve/3`, `discover/3`, `assert/3`, `trace/3`, `signal/3`, `refresh_check/3`, `normalize/2`, `health_check/0`, and `capabilities/0`. Write callbacks (`assert/3`, `trace/3`, `signal/3`, `refresh_check/3`) are optional — read-only backends declare their capabilities accordingly. Grafeo is the reference adapter. PostgreSQL/pgvector, Neo4j, Elasticsearch, and warehouse backends are a configuration change, not a code change.
 
 Deeper detail in [`docs/architecture.md`](docs/architecture.md).
 
@@ -185,24 +183,26 @@ Deeper detail in [`docs/architecture.md`](docs/architecture.md).
 
 ## Configuration
 
-The server reads two environment variables to populate the agent context on every request:
+The server reads three environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CQR_AGENT_ID` | `anonymous` | Agent identifier used for provenance and authority fields |
+| `CQR_AGENT_ID` | `twin:default` | Agent identifier used for provenance and authority fields |
 | `CQR_AGENT_SCOPE` | `scope:company` | Agent's active scope in the hierarchy |
+| `CQR_MCP_PORT` | `4000` | Port for the SSE/HTTP transport |
 
-The sample dataset lives in `lib/cqr/repo/seed.ex`. Replace it with your own scopes, entities, and relationships to point CQR at real organizational knowledge. The seeder is idempotent and runs only when the database is empty.
+The sample dataset lives in `lib/repo/seed.ex`. Replace it with your own scopes, entities, and relationships to point CQR at real organizational knowledge. The seeder is idempotent and runs only when the database is empty.
 
 To add a new adapter, implement `Cqr.Adapter.Behaviour` and register it in application config. See [`docs/architecture.md`](docs/architecture.md) for the contract and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the workflow.
 
 ## Roadmap
 
-**V2 primitives** — HYPOTHESIZE, COMPARE, ANCHOR, AWARENESS. The grammar and semantics are specified today; what remains is the adapter and engine work to ship them.
+The eleven-primitive protocol is shipped. What is next:
 
-**Platform extensions** — Multi-agent runtime with agent taxonomy and permission intersection, human-agent coupling management, lease-based resource governance, and context contamination prevention are UNICA commercial platform features that consume this server as a building block.
-
-**Transport** — stdio is primary. SSE transport for remote MCP connections via Plug/Bandit is planned for V1.1.
+- **Phoenix LiveView interface** — A first-party operator UI for browsing scopes, inspecting provenance chains, reviewing certification queues, and watching live signal traffic. Consumes the same `Cqr.Engine.execute/2` boundary as MCP clients, so governance behaviour is identical.
+- **Cognitive evidence experiments** — Structured benchmarks measuring how scope-bounded retrieval, mandatory quality metadata, and provenance-aware error envelopes change LLM agent behaviour against ungoverned RAG baselines.
+- **Enterprise adapters** — Reference adapters for PostgreSQL/pgvector, Neo4j, Elasticsearch, and warehouse backends (Snowflake, BigQuery). The behaviour contract already supports them; these are configuration-driven implementations.
+- **Multi-agent runtime** — Agent taxonomy with permission intersection, human-agent coupling management, lease-based resource governance, and context contamination prevention. UNICA commercial platform features that consume this server as a building block.
 
 ## Testing
 
@@ -210,11 +210,7 @@ To add a new adapter, implement `Cqr.Adapter.Behaviour` and register it in appli
 mix test
 ```
 
-The suite runs 429 tests in-process against an ephemeral Grafeo database -- no
-Docker, no external services. Every primitive has parser tests, engine tests, and
-an MCP integration test that exercises the full JSON-RPC path. The 95-case
-exhaustive MCP integration suite in `test/cqr_mcp/integration_test.exs` is the
-fastest way to catch regressions across all seven tools after an adapter change.
+The suite runs **538 tests** in-process against an ephemeral Grafeo database — no Docker, no external services. Every primitive has parser tests, engine tests, and an MCP integration test that exercises the full JSON-RPC path. The exhaustive MCP integration suite in `test/cqr_mcp/integration_test.exs` is the fastest way to catch regressions across all twelve tools after an adapter or planner change.
 
 ## Documentation
 
