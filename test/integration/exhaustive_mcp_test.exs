@@ -580,9 +580,14 @@ defmodule Cqr.Integration.ExhaustiveMcpTest do
       assert "customer_success" in namespaces
     end
 
-    test "C07 product scope: 'revenue' query returns no entities" do
-      assert {:ok, %Cqr.Result{data: []}} =
+    test "C07 product scope: 'revenue' query returns no text-path entities" do
+      assert {:ok, %Cqr.Result{data: data}} =
                Engine.execute(~s(DISCOVER concepts RELATED TO "revenue"), @product_context)
+
+      Enum.each(data, fn r ->
+        refute String.contains?(String.downcase(r.name), "revenue")
+        refute String.contains?(String.downcase(r.description || ""), "revenue")
+      end)
     end
 
     test "C08 finance scope: 'revenue' query returns finance entities only" do
@@ -1063,9 +1068,14 @@ defmodule Cqr.Integration.ExhaustiveMcpTest do
                Engine.execute("RESOLVE entity:test_exh:h06_product_only", @finance_context)
     end
 
-    test "H07 free-text 'revenue' from product scope returns 0 results" do
-      assert {:ok, %Cqr.Result{data: []}} =
+    test "H07 free-text 'revenue' from product scope returns no text-path hits" do
+      assert {:ok, %Cqr.Result{data: data}} =
                Engine.execute(~s(DISCOVER concepts RELATED TO "revenue"), @product_context)
+
+      Enum.each(data, fn r ->
+        refute String.contains?(String.downcase(r.name), "revenue")
+        refute String.contains?(String.downcase(r.description || ""), "revenue")
+      end)
     end
 
     test "H08 free-text 'revenue' from finance scope returns finance results only" do

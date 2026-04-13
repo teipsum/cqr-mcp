@@ -518,6 +518,14 @@ defmodule Cqr.Adapter.Grafeo do
     reputation = 0.5
     now = DateTime.utc_now() |> DateTime.to_iso8601()
 
+    # Pseudo-embedding over name + description matches the seeder's format,
+    # so the free-text DISCOVER vector path surfaces asserted entities the
+    # same way it surfaces seeded ones.
+    embedding_literal =
+      "#{name} #{expression.description}"
+      |> Seed.pseudo_embedding()
+      |> Seed.format_embedding()
+
     query =
       "INSERT (:Entity {" <>
         "namespace: '#{ns}', name: '#{name}', " <>
@@ -530,7 +538,8 @@ defmodule Cqr.Adapter.Grafeo do
         "intent: '#{escape(expression.intent)}', " <>
         "owner: '#{escape(agent_id)}', " <>
         "reputation: #{reputation}, " <>
-        "freshness_hours_ago: 0" <>
+        "freshness_hours_ago: 0, " <>
+        "embedding: #{embedding_literal}" <>
         "})"
 
     exec_write(query)

@@ -122,7 +122,13 @@ defmodule Cqr.Repo.Seed do
     end
   end
 
-  defp format_embedding(vec) do
+  @doc """
+  Format an embedding vector as a Cypher list literal for INSERT statements.
+  Exposed so the Grafeo adapter can write the same format on ASSERT as the
+  seeder does, keeping the free-text DISCOVER vector path usable across
+  both seeded and asserted entities.
+  """
+  def format_embedding(vec) do
     body =
       Enum.map_join(vec, ", ", fn x ->
         :erlang.float_to_binary(x * 1.0, decimals: 6)
