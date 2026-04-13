@@ -20,6 +20,7 @@ defmodule CqrMcp.Application do
       {Cqr.Grafeo.Server, storage: storage, seed: seed, reset: reset},
       Cqr.Repo.ScopeTree,
       CqrMcp.Server,
+      {Registry, keys: :duplicate, name: CqrMcp.SSE.Registry},
       {Bandit, plug: CqrMcp.SSE.Router, port: sse_port()}
     ]
 
