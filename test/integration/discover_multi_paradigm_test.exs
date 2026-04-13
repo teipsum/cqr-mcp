@@ -72,8 +72,20 @@ defmodule Cqr.Integration.DiscoverMultiParadigmTest do
       # Same query, product agent. Product scope holds no entities whose
       # name or description contains "revenue", so no entities should
       # surface. This proves the scope filter runs BEFORE the search.
-      assert {:ok, %{data: []}} =
+      assert {:ok, result} =
                Engine.execute(~s(DISCOVER concepts RELATED TO "revenue"), @product_context)
+
+      # No entity whose name or description contains 'revenue' should surface
+      # from sibling scopes. Vector search may return weak matches from test
+      # artifacts, but the scope filter must exclude finance revenue entities.
+      revenue_hits =
+        Enum.filter(result.data, fn row ->
+          String.contains?(String.downcase(row.name), "revenue") or
+            String.contains?(String.downcase(row.description), "revenue")
+        end)
+
+      assert revenue_hits == [],
+             "Expected no revenue-related entities in product scope, got: #{inspect(Enum.map(revenue_hits, & &1.name))}"
     end
   end
 
