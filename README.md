@@ -32,7 +32,7 @@ Ten minutes, zero external dependencies.
 git clone https://github.com/teipsum/cqr-mcp.git
 cd cqr-mcp
 mix deps.get
-mix run --no-halt
+./bin/cqr
 ```
 
 On first boot the embedded Grafeo database is created in-memory, a sample organizational dataset (6 scopes, 27 entities, 17 typed relationships) is seeded, and the server begins listening on stdio for MCP connections.
@@ -42,16 +42,16 @@ On first boot the embedded Grafeo database is created in-memory, a sample organi
 By default the server runs in-memory with sample data — every restart is a fresh database.
 To persist data across restarts:
 
-    mix run --no-halt -- --persist
+    ./bin/cqr --persist
 
 Data is stored at `~/.cqr/grafeo.grafeo`. Persistent mode starts with an empty database —
 populate it with `cqr_assert` or adapter imports. To use a custom path:
 
-    mix run --no-halt -- --persist /path/to/db
+    ./bin/cqr --persist /path/to/db
 
 To reset the database and re-seed with sample data:
 
-    mix run --no-halt -- --persist --reset
+    ./bin/cqr --persist --reset
 
 ### Populating the knowledge graph
 
@@ -66,32 +66,23 @@ embedding-indexed. The task defaults to `~/.cqr/grafeo.grafeo`; pass an explicit
 path to populate a different database file. The MCP server must be stopped first --
 only one process can hold the Grafeo file lock.
 
-### The `cqr` startup script
+### The `bin/cqr` startup script
 
-Claude Desktop config works fine calling `elixir` directly, but a small convenience
-wrapper makes restart-from-anywhere painless. An example script lives at
-`scripts/cqr` and is intended to be copied to `~/bin/cqr`:
+The repo ships a launcher at `bin/cqr` that handles graceful restart, environment
+defaults, and stdio-safe pre-compilation. Call it directly from the repo root or
+symlink it onto your `PATH`:
 
-```bash
-#!/bin/bash
-# SIGTERM first so Grafeo can checkpoint to disk, then SIGKILL only if needed.
-pkill -TERM -f "beam.smp.*sname.*cqr" 2>/dev/null
-sleep 2
-pkill -9 -f "beam.smp.*sname.*cqr" 2>/dev/null
-sleep 1
+    ./bin/cqr            # in-memory mode
+    ./bin/cqr --persist  # persistent mode, args forward through
 
-cd ~/git/teipsum/cqr-mcp
-export CQR_AGENT_SCOPE="${CQR_AGENT_SCOPE:-scope:company}"
-export CQR_AGENT_ID="${CQR_AGENT_ID:-twin:michael}"
-exec elixir --sname cqr -S mix run --no-halt -- "$@"
-```
-
-The SIGTERM-first / short-wait / SIGKILL pattern matters for persistent mode: the
-Grafeo on-disk format is only guaranteed consistent after a clean close, and a
-plain `pkill -9` skips the checkpoint path. The `--sname cqr` flag gives the BEAM
-a stable name so `pkill` can find it reliably across restarts. With this script on
-your `PATH`, the Claude Desktop config can reference `cqr` directly and forward
-flags like `--persist` transparently.
+The SIGTERM-first / short-wait / SIGKILL pattern in the script matters for
+persistent mode: the Grafeo on-disk format is only guaranteed consistent after a
+clean close, and a plain `pkill -9` skips the checkpoint path. The `--sname cqr`
+flag gives the BEAM a stable node name so `pkill` can find it reliably across
+restarts and so only one instance runs at a time. Pre-compilation is silenced
+because MCP speaks JSON-RPC over stdio — compiler chatter would corrupt the
+protocol stream. With `bin/cqr` on your `PATH`, the Claude Desktop config can
+reference `cqr` directly and forward flags like `--persist` transparently.
 
 ### Connect from Claude Desktop
 

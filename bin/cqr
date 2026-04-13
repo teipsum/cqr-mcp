@@ -1,0 +1,31 @@
+#!/bin/bash
+# CQR MCP server launcher.
+#
+# - Graceful SIGTERM first so Grafeo can checkpoint to disk; SIGKILL only as
+#   a fallback. Persistent-mode databases require a clean close to remain
+#   consistent on disk.
+# - --sname cqr gives the BEAM a stable node name so pkill can find it
+#   reliably across restarts and so only one instance runs at a time.
+# - Pre-compilation runs with stdout silenced because MCP speaks JSON-RPC
+#   over stdio; compiler chatter would corrupt the protocol stream.
+# - Forwards CLI args (e.g. --persist, --reset) to mix run.
+
+set -e
+
+pkill -TERM -f "beam.smp.*sname.*cqr" 2>/dev/null || true
+sleep 2
+pkill -9 -f "beam.smp.*sname.*cqr" 2>/dev/null || true
+sleep 1
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+[ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
+
+export CQR_BUILD_NIF=true
+export CQR_AGENT_SCOPE="${CQR_AGENT_SCOPE:-scope:company}"
+export CQR_AGENT_ID="${CQR_AGENT_ID:-twin:default}"
+
+mix compile --no-protocol-consolidation > /dev/null 2>&1
+
+exec elixir --sname cqr -S mix run --no-halt -- "$@"
