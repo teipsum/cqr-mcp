@@ -209,6 +209,128 @@ defmodule Cqr.Integration.CertifyLifecycleTest do
     end
   end
 
+  describe "contested lifecycle" do
+    test "certified -> contested -> under_review is allowed" do
+      assert_test_entity("case_contested_path")
+
+      for status <- ["proposed", "under_review", "certified"] do
+        assert {:ok, _} =
+                 certify("entity:test_certify:case_contested_path", status,
+                   authority: "product_lead"
+                 )
+      end
+
+      assert {:ok, r_contested} =
+               certify("entity:test_certify:case_contested_path", "contested",
+                 authority: "challenger",
+                 evidence: "Definition challenged by review"
+               )
+
+      assert hd(r_contested.data).new_status == :contested
+      assert hd(r_contested.data).previous_status == :certified
+
+      assert {:ok, r_review} =
+               certify("entity:test_certify:case_contested_path", "under_review",
+                 authority: "review_board"
+               )
+
+      assert hd(r_review.data).new_status == :under_review
+      assert hd(r_review.data).previous_status == :contested
+    end
+
+    test "contested -> certified directly is blocked" do
+      assert_test_entity("case_contested_skip")
+
+      for status <- ["proposed", "under_review", "certified", "contested"] do
+        assert {:ok, _} =
+                 certify("entity:test_certify:case_contested_skip", status,
+                   authority: "product_lead"
+                 )
+      end
+
+      assert {:error, err} =
+               certify("entity:test_certify:case_contested_skip", "certified",
+                 authority: "product_lead"
+               )
+
+      assert err.code == :invalid_transition
+      assert err.retry_guidance =~ "under_review"
+    end
+
+    test "contested entity preserves the certified reputation value" do
+      assert_test_entity("case_contested_reputation")
+
+      for status <- ["proposed", "under_review", "certified"] do
+        assert {:ok, _} =
+                 certify("entity:test_certify:case_contested_reputation", status,
+                   authority: "product_lead"
+                 )
+      end
+
+      assert {:ok, before} =
+               Engine.execute(
+                 "RESOLVE entity:test_certify:case_contested_reputation",
+                 @product_context
+               )
+
+      certified_reputation = hd(before.data).reputation
+      assert certified_reputation >= 0.9
+
+      assert {:ok, _} =
+               certify("entity:test_certify:case_contested_reputation", "contested",
+                 authority: "challenger",
+                 evidence: "Contesting current definition"
+               )
+
+      assert {:ok, after_contest} =
+               Engine.execute(
+                 "RESOLVE entity:test_certify:case_contested_reputation",
+                 @product_context
+               )
+
+      assert hd(after_contest.data).reputation == certified_reputation
+    end
+  end
+
+  describe "superseded revival" do
+    test "superseded -> proposed re-enters the lifecycle" do
+      assert_test_entity("case_revive")
+
+      for status <- ["proposed", "under_review", "certified", "superseded"] do
+        assert {:ok, _} =
+                 certify("entity:test_certify:case_revive", status, authority: "product_lead")
+      end
+
+      assert {:ok, r_revived} =
+               certify("entity:test_certify:case_revive", "proposed",
+                 authority: "product_lead",
+                 evidence: "Revived after new evidence"
+               )
+
+      assert hd(r_revived.data).new_status == :proposed
+      assert hd(r_revived.data).previous_status == :superseded
+    end
+
+    test "superseded -> certified directly is blocked" do
+      assert_test_entity("case_revive_skip")
+
+      for status <- ["proposed", "under_review", "certified", "superseded"] do
+        assert {:ok, _} =
+                 certify("entity:test_certify:case_revive_skip", status,
+                   authority: "product_lead"
+                 )
+      end
+
+      assert {:error, err} =
+               certify("entity:test_certify:case_revive_skip", "certified",
+                 authority: "product_lead"
+               )
+
+      assert err.code == :invalid_transition
+      assert err.retry_guidance =~ "proposed"
+    end
+  end
+
   describe "audit trail query" do
     test "three CertificationRecord nodes exist after full lifecycle, each with a unique UUID" do
       assert_test_entity("case4_audit_trail")

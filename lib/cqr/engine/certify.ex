@@ -2,7 +2,8 @@ defmodule Cqr.Engine.Certify do
   @moduledoc """
   CERTIFY execution path.
 
-  Manages the governance lifecycle: proposed → under_review → certified → superseded.
+  Manages the governance lifecycle: proposed -> under_review -> certified ->
+  (contested -> under_review | superseded -> proposed).
 
   Each phase transition:
 
@@ -25,8 +26,9 @@ defmodule Cqr.Engine.Certify do
     nil => [:proposed],
     :proposed => [:under_review, :superseded],
     :under_review => [:certified, :proposed, :superseded],
-    :certified => [:superseded],
-    :superseded => []
+    :certified => [:contested, :superseded],
+    :contested => [:under_review],
+    :superseded => [:proposed]
   }
 
   @doc """
@@ -122,6 +124,7 @@ defmodule Cqr.Engine.Certify do
 
   defp adjust_reputation(:certified, current), do: max(current, 0.9)
   defp adjust_reputation(:superseded, current), do: min(current, 0.3)
+  defp adjust_reputation(:contested, current), do: current
   defp adjust_reputation(_, current), do: current
 
   # --- Audit record writes ---

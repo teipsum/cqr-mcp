@@ -20,11 +20,12 @@ defmodule Cqr.Parser.Certify do
         string("under_review") |> replace(:under_review),
         string("proposed") |> replace(:proposed),
         string("certified") |> replace(:certified),
+        string("contested") |> replace(:contested),
         string("superseded") |> replace(:superseded)
       ])
     )
     |> unwrap_and_tag(:status)
-    |> label("STATUS clause (proposed, under_review, certified, superseded)")
+    |> label("STATUS clause (proposed, under_review, certified, contested, superseded)")
   end
 
   def authority_clause do
