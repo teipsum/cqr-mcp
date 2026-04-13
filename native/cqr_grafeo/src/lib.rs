@@ -37,8 +37,12 @@ fn new(path: Term) -> NifResult<(Atom, ResourceArc<GrafeoResource>)> {
         GrafeoDB::new_in_memory()
     } else {
         let path_str: String = path.decode()?;
+        // Sync durability fsyncs after every commit. The default Batch mode
+        // loses up-to-100ms of writes on SIGKILL, which for a single-user
+        // MCP server doing tens of writes per session is a bad trade.
         let config = grafeo::Config::persistent(&path_str)
-            .with_storage_format(grafeo_engine::config::StorageFormat::SingleFile);
+            .with_storage_format(grafeo_engine::config::StorageFormat::SingleFile)
+            .with_wal_durability(grafeo::DurabilityMode::Sync);
         match GrafeoDB::with_config(config) {
             Ok(db) => db,
             Err(e) => {
