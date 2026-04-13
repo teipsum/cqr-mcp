@@ -555,7 +555,7 @@ defmodule CqrMcp.Tools do
           },
           "status" => %{
             "type" => "string",
-            "enum" => ["proposed", "under_review", "certified", "superseded"],
+            "enum" => ["proposed", "under_review", "certified", "contested", "superseded"],
             "description" => "Target certification status"
           },
           "authority" => %{
