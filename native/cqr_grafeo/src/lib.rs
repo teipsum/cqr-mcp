@@ -3,6 +3,7 @@
 // NIF surface:
 //   new/1          — create/open a Grafeo database instance
 //   execute/2      — execute a query (GQL, Cypher, etc.)
+//   checkpoint/1   — flush WAL + snapshot to disk without closing
 //   close/1        — close the database instance
 //   health_check/1 — report operational status
 
@@ -78,6 +79,28 @@ fn execute(env: Env, resource: ResourceArc<GrafeoResource>, query: String) -> Ni
         }
         Err(e) => Ok((atoms::error(), format!("{}", e)).encode(env)),
     }
+}
+
+/// Flush WAL and snapshot to disk without closing the database.
+///
+/// For SingleFile storage this writes the current state to the `.grafeo`
+/// file so a SIGKILL won't discard in-memory writes since the last
+/// checkpoint. No-op for in-memory databases.
+#[rustler::nif(schedule = "DirtyIo")]
+fn checkpoint(resource: ResourceArc<GrafeoResource>) -> NifResult<Atom> {
+    let guard = resource
+        .db
+        .lock()
+        .map_err(|_| rustler::Error::Term(Box::new("Mutex poisoned")))?;
+
+    let db = guard
+        .as_ref()
+        .ok_or_else(|| rustler::Error::Term(Box::new("Database closed")))?;
+
+    db.wal_checkpoint()
+        .map_err(|e| rustler::Error::Term(Box::new(format!("Checkpoint failed: {}", e))))?;
+
+    Ok(atoms::ok())
 }
 
 #[rustler::nif]

@@ -10,6 +10,7 @@ defmodule Cqr.Grafeo.Native do
 
     * `new/1` — open/create a Grafeo database (`:memory` or file path)
     * `execute/2` — execute a GQL/Cypher query, returns JSON string
+    * `checkpoint/1` — flush WAL + snapshot to disk without closing
     * `close/1` — close the database handle
     * `health_check/1` — report operational status and version
 
@@ -42,6 +43,15 @@ defmodule Cqr.Grafeo.Native do
 
   @doc "Execute a GQL/Cypher query. Returns `{:ok, json_string}` or `{:error, reason}`."
   def execute(_db, _query), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Flush WAL and snapshot to disk without closing the database.
+
+  For persistent SingleFile storage, this writes the current state to the
+  `.grafeo` file so a hard kill does not discard in-memory writes since
+  the last checkpoint. No-op for in-memory databases.
+  """
+  def checkpoint(_db), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc "Close the database handle."
   def close(_db), do: :erlang.nif_error(:nif_not_loaded)
