@@ -1,6 +1,10 @@
 defmodule CqrMcp.Tools do
   @moduledoc """
-  MCP tool definitions: cqr_resolve, cqr_discover, cqr_certify.
+  MCP tool definitions for the CQR planner.
+
+  Provides the 12 tools surfaced to MCP clients: cqr_resolve, cqr_discover,
+  cqr_certify, cqr_assert, cqr_assert_batch, cqr_trace, cqr_signal,
+  cqr_refresh, cqr_awareness, cqr_hypothesize, cqr_compare, and cqr_anchor.
 
   Each tool definition includes name, description, and JSON Schema for inputs.
   Tool execution delegates to `Cqr.Engine.execute/2`.
