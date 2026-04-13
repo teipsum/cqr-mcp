@@ -19,7 +19,8 @@ defmodule CqrMcp.Tools do
       refresh_tool(),
       awareness_tool(),
       hypothesize_tool(),
-      compare_tool()
+      compare_tool(),
+      anchor_tool()
     ]
   end
 
@@ -94,6 +95,13 @@ defmodule CqrMcp.Tools do
 
   def call("cqr_compare", args, context) do
     case build_compare_expression(args) do
+      {:ok, expression} -> execute_and_format(expression, context)
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  def call("cqr_anchor", args, context) do
+    case build_anchor_expression(args) do
       {:ok, expression} -> execute_and_format(expression, context)
       {:error, error} -> {:error, error}
     end
@@ -478,6 +486,49 @@ defmodule CqrMcp.Tools do
             "description" =>
               "Optional comma-separated facets to include: relationships, properties, " <>
                 "quality. Defaults to all three."
+          }
+        },
+        "required" => ["entities"]
+      }
+    }
+  end
+
+  defp anchor_tool do
+    %{
+      "name" => "cqr_anchor",
+      "description" =>
+        "Evaluate the composite confidence of a chain of entities used together as a " <>
+          "reasoning step. Returns the weakest-link confidence floor, average reputation, " <>
+          "lists of missing, uncertified, stale, and below-reputation links, and " <>
+          "actionable recommendations (certify X, refresh Y, raise reputation on Z) so " <>
+          "an agent can decide whether to trust the chain enough to act on it.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "entities" => %{
+            "type" => "string",
+            "description" =>
+              "Comma-separated list of entity references forming the reasoning chain, " <>
+                "e.g. 'entity:finance:arr,entity:product:churn_rate'. At least one entity " <>
+                "is required; most useful with two or more."
+          },
+          "rationale" => %{
+            "type" => "string",
+            "description" =>
+              "Optional free-text description of the decision this chain underwrites. " <>
+                "Surfaced back in the result for audit traceability."
+          },
+          "freshness" => %{
+            "type" => "string",
+            "description" =>
+              "Optional staleness threshold (e.g. '24h', '7d'). Entities older than this " <>
+                "are flagged stale."
+          },
+          "reputation" => %{
+            "type" => "number",
+            "description" =>
+              "Optional minimum reputation threshold (0.0 to 1.0). Entities below it are " <>
+                "flagged and surfaced in recommendations."
           }
         },
         "required" => ["entities"]
@@ -963,6 +1014,70 @@ defmodule CqrMcp.Tools do
              "include must list facets from " <>
                Enum.join(@valid_compare_facets, ", ") <>
                ". Invalid: " <> Enum.join(bad, ", ")
+         }}
+    end
+  end
+
+  defp build_anchor_expression(args) do
+    with {:ok, raw} <- require_string(args, "entities"),
+         {:ok, refs} <- parse_anchor_entities(raw) do
+      parts = ["ANCHOR #{Enum.join(refs, ", ")}"]
+
+      parts =
+        case args["rationale"] do
+          rationale when is_binary(rationale) and rationale != "" ->
+            parts ++ [~s(FOR "#{sanitize_quoted(rationale)}")]
+
+          _ ->
+            parts
+        end
+
+      parts =
+        case args["freshness"] do
+          window when is_binary(window) and window != "" ->
+            parts ++ ["WITH freshness < #{window}"]
+
+          _ ->
+            parts
+        end
+
+      parts =
+        case args["reputation"] do
+          score when is_number(score) ->
+            parts ++
+              ["WITH reputation > #{:erlang.float_to_binary(score * 1.0, decimals: 2)}"]
+
+          _ ->
+            parts
+        end
+
+      {:ok, Enum.join(parts, " ")}
+    end
+  end
+
+  defp parse_anchor_entities(raw) do
+    refs =
+      raw
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    cond do
+      refs == [] ->
+        {:error, %{"code" => -32_602, "message" => "entities must list at least one entity"}}
+
+      Enum.all?(refs, &String.starts_with?(&1, "entity:")) ->
+        {:ok, refs}
+
+      true ->
+        bad = Enum.reject(refs, &String.starts_with?(&1, "entity:"))
+
+        {:error,
+         %{
+           "code" => -32_602,
+           "message" =>
+             "entities must be in entity:namespace:name form. Invalid: " <>
+               Enum.join(bad, ", ")
          }}
     end
   end

@@ -36,6 +36,9 @@ defmodule Cqr.Adapter.Behaviour do
   @callback compare(expression :: term(), scope_context :: term(), opts :: keyword()) ::
               {:ok, term()} | {:error, term()}
 
+  @callback anchor(expression :: term(), scope_context :: term(), opts :: keyword()) ::
+              {:ok, term()} | {:error, term()}
+
   @callback normalize(raw_results :: term(), metadata :: term()) :: term()
 
   @callback health_check() :: :ok | {:error, term()}
@@ -49,6 +52,7 @@ defmodule Cqr.Adapter.Behaviour do
     refresh_check: 3,
     awareness: 3,
     hypothesize: 3,
-    compare: 3
+    compare: 3,
+    anchor: 3
   ]
 end

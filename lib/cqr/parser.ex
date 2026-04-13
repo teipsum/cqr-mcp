@@ -19,6 +19,7 @@ defmodule Cqr.Parser do
   import NimbleParsec
 
   alias Cqr.Parser.{
+    Anchor,
     Assert,
     Awareness,
     Certify,
@@ -43,7 +44,8 @@ defmodule Cqr.Parser do
       Refresh.refresh(),
       Awareness.awareness(),
       Hypothesize.hypothesize(),
-      Compare.compare()
+      Compare.compare(),
+      Anchor.anchor()
     ])
     |> eos()
   )
@@ -133,8 +135,11 @@ defmodule Cqr.Parser do
       String.starts_with?(rest, "COMPAR") ->
         "Did you mean COMPARE?"
 
+      String.starts_with?(rest, "ANCHO") ->
+        "Did you mean ANCHOR?"
+
       true ->
-        "Expression must start with RESOLVE, DISCOVER, CERTIFY, ASSERT, TRACE, SIGNAL, REFRESH, AWARENESS, HYPOTHESIZE, or COMPARE. Unexpected: \"#{String.slice(rest, 0, 20)}\""
+        "Expression must start with RESOLVE, DISCOVER, CERTIFY, ASSERT, TRACE, SIGNAL, REFRESH, AWARENESS, HYPOTHESIZE, COMPARE, or ANCHOR. Unexpected: \"#{String.slice(rest, 0, 20)}\""
     end
   end
 end

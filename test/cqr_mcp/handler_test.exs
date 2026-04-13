@@ -60,7 +60,7 @@ defmodule CqrMcp.HandlerTest do
   end
 
   describe "tools/list" do
-    test "returns eleven tools" do
+    test "returns twelve tools" do
       response =
         Handler.handle_request(%{
           "jsonrpc" => "2.0",
@@ -69,7 +69,7 @@ defmodule CqrMcp.HandlerTest do
         })
 
       tools = response["result"]["tools"]
-      assert length(tools) == 11
+      assert length(tools) == 12
 
       names = Enum.map(tools, & &1["name"])
       assert "cqr_resolve" in names
@@ -83,6 +83,7 @@ defmodule CqrMcp.HandlerTest do
       assert "cqr_awareness" in names
       assert "cqr_hypothesize" in names
       assert "cqr_compare" in names
+      assert "cqr_anchor" in names
     end
 
     test "each tool has name, description, and inputSchema" do
@@ -458,7 +459,7 @@ defmodule CqrMcp.HandlerTest do
           "method" => "tools/list"
         })
 
-      assert length(r3["result"]["tools"]) == 11
+      assert length(r3["result"]["tools"]) == 12
 
       r4 =
         Handler.handle_request(%{
