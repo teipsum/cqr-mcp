@@ -60,7 +60,7 @@ defmodule CqrMcp.HandlerTest do
   end
 
   describe "tools/list" do
-    test "returns seven tools" do
+    test "returns nine tools" do
       response =
         Handler.handle_request(%{
           "jsonrpc" => "2.0",
@@ -69,7 +69,7 @@ defmodule CqrMcp.HandlerTest do
         })
 
       tools = response["result"]["tools"]
-      assert length(tools) == 8
+      assert length(tools) == 9
 
       names = Enum.map(tools, & &1["name"])
       assert "cqr_resolve" in names
@@ -80,6 +80,7 @@ defmodule CqrMcp.HandlerTest do
       assert "cqr_trace" in names
       assert "cqr_signal" in names
       assert "cqr_refresh" in names
+      assert "cqr_compare" in names
     end
 
     test "each tool has name, description, and inputSchema" do
@@ -217,6 +218,77 @@ defmodule CqrMcp.HandlerTest do
 
       assert response["result"] != nil
       refute response["result"]["isError"]
+    end
+  end
+
+  describe "tools/call — cqr_compare" do
+    test "compares two seeded entities" do
+      System.put_env("CQR_AGENT_SCOPE", "scope:company:product")
+
+      response =
+        Handler.handle_request(%{
+          "jsonrpc" => "2.0",
+          "id" => 30,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "cqr_compare",
+            "arguments" => %{
+              "entities" => "entity:product:churn_rate,entity:product:nps"
+            }
+          }
+        })
+
+      assert response["result"] != nil
+      refute response["result"]["isError"]
+
+      parsed = Jason.decode!(hd(response["result"]["content"])["text"])
+      [row] = parsed["data"]
+      assert row["entities"] == ["entity:product:churn_rate", "entity:product:nps"]
+      # Reputation can be mutated by other suites; assert the field is a
+      # number rather than a specific seed value.
+      assert is_number(row["per_entity"]["entity:product:churn_rate"]["reputation"])
+    end
+
+    test "single entity arg returns input error" do
+      System.put_env("CQR_AGENT_SCOPE", "scope:company:product")
+
+      response =
+        Handler.handle_request(%{
+          "jsonrpc" => "2.0",
+          "id" => 31,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "cqr_compare",
+            "arguments" => %{"entities" => "entity:product:churn_rate"}
+          }
+        })
+
+      result = response["result"]
+      assert result["isError"] == true
+    end
+
+    test "INCLUDE only quality omits other facets" do
+      System.put_env("CQR_AGENT_SCOPE", "scope:company:product")
+
+      response =
+        Handler.handle_request(%{
+          "jsonrpc" => "2.0",
+          "id" => 32,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "cqr_compare",
+            "arguments" => %{
+              "entities" => "entity:product:churn_rate,entity:product:nps",
+              "include" => "quality"
+            }
+          }
+        })
+
+      refute response["result"]["isError"]
+      [row] = Jason.decode!(hd(response["result"]["content"])["text"])["data"]
+      refute Map.has_key?(row, "shared_relationships")
+      refute Map.has_key?(row, "differing_properties")
+      assert Map.has_key?(row, "quality_differences")
     end
   end
 
@@ -384,7 +456,7 @@ defmodule CqrMcp.HandlerTest do
           "method" => "tools/list"
         })
 
-      assert length(r3["result"]["tools"]) == 8
+      assert length(r3["result"]["tools"]) == 9
 
       r4 =
         Handler.handle_request(%{
