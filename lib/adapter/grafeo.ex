@@ -1880,70 +1880,17 @@ defmodule Cqr.Adapter.Grafeo do
     resolved = for {:resolved, ent, data} <- records, do: {ent, data}
     missing = for {:missing, ent, reason} <- records, do: {ent, reason}
 
-    reputations =
-      resolved
-      |> Enum.map(fn {_ent, data} -> numeric(data[:reputation]) end)
-      |> Enum.reject(&is_nil/1)
-
     missing_refs = Enum.map(missing, fn {ent, _} -> Cqr.Types.format_entity(ent) end)
+    uncertified = collect_uncertified(resolved)
+    stale = collect_stale(resolved, threshold_hours)
+    below_reputation = collect_below_reputation(resolved, expression.reputation)
 
-    uncertified =
-      resolved
-      |> Enum.filter(fn {_ent, data} -> data[:certified] != true end)
-      |> Enum.map(fn {ent, _data} -> Cqr.Types.format_entity(ent) end)
-
-    stale =
-      if threshold_hours do
-        resolved
-        |> Enum.filter(fn {_ent, data} ->
-          age = numeric(data[:freshness_hours_ago])
-          is_number(age) and age > threshold_hours
-        end)
-        |> Enum.map(fn {ent, data} ->
-          %{
-            entity: Cqr.Types.format_entity(ent),
-            freshness_hours_ago: numeric(data[:freshness_hours_ago]),
-            threshold_hours: threshold_hours
-          }
-        end)
-      else
-        []
-      end
-
-    below_reputation =
-      case expression.reputation do
-        nil ->
-          []
-
-        threshold ->
-          resolved
-          |> Enum.filter(fn {_ent, data} ->
-            rep = numeric(data[:reputation])
-            is_number(rep) and rep < threshold
-          end)
-          |> Enum.map(fn {ent, data} ->
-            %{
-              entity: Cqr.Types.format_entity(ent),
-              reputation: numeric(data[:reputation]),
-              threshold: threshold
-            }
-          end)
-      end
-
-    {weakest, average} =
-      case {reputations, missing} do
-        {[], _} -> {0.0, 0.0}
-        {reps, []} -> {Enum.min(reps), mean(reps)}
-        {reps, _} -> {0.0, mean(reps)}
-      end
-
-    uncertified_count = length(uncertified)
-    missing_count = length(missing)
+    {weakest, average} = chain_stats(resolved, missing)
 
     chain_confidence =
       weakest
-      |> apply_penalty(uncertified_count, 0.8)
-      |> apply_penalty(missing_count, 0.5)
+      |> apply_penalty(length(uncertified), 0.8)
+      |> apply_penalty(length(missing), 0.5)
 
     entities_summary =
       Enum.map(records, &summarize_record(&1, threshold_hours, expression.reputation))
@@ -1961,6 +1908,59 @@ defmodule Cqr.Adapter.Grafeo do
       entities: entities_summary,
       recommendations: build_recommendations(missing_refs, uncertified, stale, below_reputation)
     }
+  end
+
+  defp collect_uncertified(resolved) do
+    resolved
+    |> Enum.filter(fn {_ent, data} -> data[:certified] != true end)
+    |> Enum.map(fn {ent, _data} -> Cqr.Types.format_entity(ent) end)
+  end
+
+  defp collect_stale(_resolved, nil), do: []
+
+  defp collect_stale(resolved, threshold_hours) do
+    resolved
+    |> Enum.filter(fn {_ent, data} ->
+      age = numeric(data[:freshness_hours_ago])
+      is_number(age) and age > threshold_hours
+    end)
+    |> Enum.map(fn {ent, data} ->
+      %{
+        entity: Cqr.Types.format_entity(ent),
+        freshness_hours_ago: numeric(data[:freshness_hours_ago]),
+        threshold_hours: threshold_hours
+      }
+    end)
+  end
+
+  defp collect_below_reputation(_resolved, nil), do: []
+
+  defp collect_below_reputation(resolved, threshold) do
+    resolved
+    |> Enum.filter(fn {_ent, data} ->
+      rep = numeric(data[:reputation])
+      is_number(rep) and rep < threshold
+    end)
+    |> Enum.map(fn {ent, data} ->
+      %{
+        entity: Cqr.Types.format_entity(ent),
+        reputation: numeric(data[:reputation]),
+        threshold: threshold
+      }
+    end)
+  end
+
+  defp chain_stats(resolved, missing) do
+    reputations =
+      resolved
+      |> Enum.map(fn {_ent, data} -> numeric(data[:reputation]) end)
+      |> Enum.reject(&is_nil/1)
+
+    case {reputations, missing} do
+      {[], _} -> {0.0, 0.0}
+      {reps, []} -> {Enum.min(reps), mean(reps)}
+      {reps, _} -> {0.0, mean(reps)}
+    end
   end
 
   defp summarize_record({:resolved, entity, data}, threshold_hours, rep_threshold) do

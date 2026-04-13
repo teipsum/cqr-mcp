@@ -904,28 +904,27 @@ defmodule CqrMcp.Tools do
   end
 
   defp build_awareness_expression(args) do
-    parts = ["AWARENESS active_agents"]
-
-    parts =
-      case args["scope"] do
-        scope when is_binary(scope) and scope != "" -> parts ++ ["WITHIN #{scope}"]
-        _ -> parts
-      end
-
-    parts =
-      case args["time_window"] do
-        window when is_binary(window) and window != "" -> parts ++ ["OVER last #{window}"]
-        _ -> parts
-      end
-
-    parts =
-      case args["limit"] do
-        n when is_integer(n) and n > 0 -> parts ++ ["LIMIT #{n}"]
-        _ -> parts
-      end
-
-    Enum.join(parts, " ")
+    ["AWARENESS active_agents"]
+    |> append_awareness_scope(args["scope"])
+    |> append_awareness_window(args["time_window"])
+    |> append_awareness_limit(args["limit"])
+    |> Enum.join(" ")
   end
+
+  defp append_awareness_scope(parts, scope) when is_binary(scope) and scope != "",
+    do: parts ++ ["WITHIN #{scope}"]
+
+  defp append_awareness_scope(parts, _), do: parts
+
+  defp append_awareness_window(parts, window) when is_binary(window) and window != "",
+    do: parts ++ ["OVER last #{window}"]
+
+  defp append_awareness_window(parts, _), do: parts
+
+  defp append_awareness_limit(parts, n) when is_integer(n) and n > 0,
+    do: parts ++ ["LIMIT #{n}"]
+
+  defp append_awareness_limit(parts, _), do: parts
 
   defp build_hypothesize_expression(args) do
     with {:ok, entity} <- require_string(args, "entity"),
