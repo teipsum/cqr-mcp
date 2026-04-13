@@ -22,6 +22,7 @@ defmodule Cqr.Parser do
     Assert,
     Awareness,
     Certify,
+    Compare,
     Discover,
     Hypothesize,
     Refresh,
@@ -41,7 +42,8 @@ defmodule Cqr.Parser do
       Signal.signal(),
       Refresh.refresh(),
       Awareness.awareness(),
-      Hypothesize.hypothesize()
+      Hypothesize.hypothesize(),
+      Compare.compare()
     ])
     |> eos()
   )
@@ -128,8 +130,11 @@ defmodule Cqr.Parser do
       String.starts_with?(rest, "HYPOTHESIZ") or String.starts_with?(rest, "HYPOTH") ->
         "Did you mean HYPOTHESIZE?"
 
+      String.starts_with?(rest, "COMPAR") ->
+        "Did you mean COMPARE?"
+
       true ->
-        "Expression must start with RESOLVE, DISCOVER, CERTIFY, ASSERT, TRACE, SIGNAL, REFRESH, AWARENESS, or HYPOTHESIZE. Unexpected: \"#{String.slice(rest, 0, 20)}\""
+        "Expression must start with RESOLVE, DISCOVER, CERTIFY, ASSERT, TRACE, SIGNAL, REFRESH, AWARENESS, HYPOTHESIZE, or COMPARE. Unexpected: \"#{String.slice(rest, 0, 20)}\""
     end
   end
 end
