@@ -41,6 +41,7 @@ defmodule CqrMcp.Server do
     spawn(fn -> process_message(line) end)
     {:noreply, state}
   end
+  def handle_info(_, state), do: {:noreply, state}
 
   defp process_message(line) do
     case Jason.decode(line) do
@@ -63,8 +64,6 @@ defmodule CqrMcp.Server do
       "error" => %{"code" => -32_700, "message" => "Parse error"}
     }
   end
-
-  def handle_info(_, state), do: {:noreply, state}
 
   # --- Stdio I/O ---
 
