@@ -10,6 +10,10 @@ defmodule Cqr.Grafeo.Server do
 
       config :cqr_mcp, Cqr.Grafeo.Server,
         storage: :memory          # or {:path, "/var/data/cqr.db"}
+
+  In persistent mode, a periodic checkpoint is scheduled so that a SIGKILL
+  bounds data loss to `checkpoint_interval_ms` (default 10s). The timer is
+  skipped for `:memory` storage to keep tests deterministic.
   """
 
   use GenServer
@@ -20,6 +24,7 @@ defmodule Cqr.Grafeo.Server do
   require Logger
 
   @default_name __MODULE__
+  @default_checkpoint_interval_ms 10_000
 
   # --- Public API ---
 
@@ -38,6 +43,14 @@ defmodule Cqr.Grafeo.Server do
     GenServer.call(name, :health)
   end
 
+  @doc """
+  Force an immediate checkpoint. Primarily for tests; persistent-mode
+  servers also checkpoint on a timer. Returns `:ok` or `{:error, reason}`.
+  """
+  def checkpoint(name \\ @default_name) do
+    GenServer.call(name, :checkpoint)
+  end
+
   # --- Callbacks ---
 
   @impl true
@@ -45,6 +58,9 @@ defmodule Cqr.Grafeo.Server do
     storage = Keyword.get(opts, :storage, :memory)
     seed = Keyword.get(opts, :seed, true)
     reset = Keyword.get(opts, :reset, false)
+
+    checkpoint_interval_ms =
+      Keyword.get(opts, :checkpoint_interval_ms, @default_checkpoint_interval_ms)
 
     prepare_storage(storage, reset)
 
@@ -63,7 +79,14 @@ defmodule Cqr.Grafeo.Server do
             :ok
         end
 
-        {:ok, %{db: db, storage: storage}}
+        state = %{
+          db: db,
+          storage: storage,
+          checkpoint_interval_ms: checkpoint_interval_ms
+        }
+
+        schedule_checkpoint(state)
+        {:ok, state}
 
       {:error, reason} ->
         {:stop, {:grafeo_open_failed, reason}}
@@ -79,6 +102,21 @@ defmodule Cqr.Grafeo.Server do
   def handle_call(:health, _from, %{db: db} = state) do
     result = Native.health_check(db)
     {:reply, result, state}
+  end
+
+  def handle_call(:checkpoint, _from, %{db: db} = state) do
+    {:reply, run_checkpoint(db, state.storage), state}
+  end
+
+  @impl true
+  def handle_info(:checkpoint_tick, %{db: db, storage: storage} = state) do
+    case run_checkpoint(db, storage) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Grafeo periodic checkpoint failed: #{inspect(reason)}")
+    end
+
+    schedule_checkpoint(state)
+    {:noreply, state}
   end
 
   @impl true
@@ -116,4 +154,25 @@ defmodule Cqr.Grafeo.Server do
 
   defp storage_label(:memory), do: "in-memory"
   defp storage_label({:path, p}), do: "persistent: #{p}"
+
+  # Periodic checkpoints only make sense for persistent storage; the
+  # in-memory backend has nothing to flush.
+  defp schedule_checkpoint(%{storage: {:path, _}, checkpoint_interval_ms: interval})
+       when is_integer(interval) and interval > 0 do
+    Process.send_after(self(), :checkpoint_tick, interval)
+    :ok
+  end
+
+  defp schedule_checkpoint(_state), do: :ok
+
+  defp run_checkpoint(db, {:path, _}) do
+    case Native.checkpoint(db) do
+      :ok -> :ok
+      other -> {:error, other}
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp run_checkpoint(_db, :memory), do: :ok
 end
