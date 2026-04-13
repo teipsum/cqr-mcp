@@ -15,18 +15,17 @@ permissions:
 
 env:
   MIX_ENV: test
+  CQR_BUILD_NIF: "true"
 
 jobs:
-  test:
-    name: test (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
+  build-and-test:
+    name: build, test, credo, format
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # mix.exs requires `elixir: "~> 1.19"`, so 1.17/1.18 cannot satisfy
-        # the constraint. When the constraint is relaxed, add them here.
         elixir: ["1.19"]
-        otp: ["27"]
+        otp: ["28"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -81,62 +80,10 @@ jobs:
         run: mix compile --warnings-as-errors
 
       - name: Run tests
-        run: mix test --trace
+        run: mix test
 
-  format:
-    name: format
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Erlang/Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.19"
-          otp-version: "27"
+      - name: Credo (strict)
+        run: mix credo --strict
 
       - name: Check formatting
         run: mix format --check-formatted
-
-  credo:
-    name: credo
-    runs-on: ubuntu-latest
-    # Soft failure: credo is not yet in deps. This job will flag issues
-    # without blocking the pipeline. Remove continue-on-error once credo
-    # is added to mix.exs and the codebase is clean.
-    continue-on-error: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Erlang/Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.19"
-          otp-version: "27"
-
-      - name: Set up Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Elixir deps
-        uses: actions/cache@v4
-        with:
-          path: deps
-          key: ${{ runner.os }}-mix-deps-27-1.19-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-mix-deps-27-1.19-
-
-      - name: Cache Elixir _build
-        uses: actions/cache@v4
-        with:
-          path: _build
-          key: ${{ runner.os }}-mix-build-27-1.19-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-mix-build-27-1.19-
-
-      - name: Fetch dependencies
-        run: mix deps.get
-
-      - name: Run credo
-        run: mix credo --strict
