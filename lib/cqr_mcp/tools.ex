@@ -13,6 +13,7 @@ defmodule CqrMcp.Tools do
       discover_tool(),
       certify_tool(),
       assert_tool(),
+      assert_batch_tool(),
       trace_tool(),
       signal_tool(),
       refresh_tool()
@@ -44,6 +45,19 @@ defmodule CqrMcp.Tools do
       {:error, error} ->
         {:error, error}
     end
+  end
+
+  def call("cqr_assert_batch", %{"entities" => entities}, context) when is_list(entities) do
+    if entities == [] do
+      {:error, %{"code" => -32_602, "message" => "entities must be a non-empty array"}}
+    else
+      results = Enum.map(entities, &execute_single_assert(&1, context))
+      {:ok, summarize_batch(results)}
+    end
+  end
+
+  def call("cqr_assert_batch", _args, _context) do
+    {:error, %{"code" => -32_602, "message" => "Missing or invalid required field: entities"}}
   end
 
   def call("cqr_trace", args, context) do
@@ -207,6 +221,49 @@ defmodule CqrMcp.Tools do
     }
   end
 
+  defp assert_batch_tool do
+    %{
+      "name" => "cqr_assert_batch",
+      "description" =>
+        "Assert multiple entities in a single call. Accepts an array of entity objects " <>
+          "with the same fields as cqr_assert (entity, type, description, intent, " <>
+          "derived_from, optional confidence and scope). Each entity is executed " <>
+          "independently: a failure on one does not prevent the others from being " <>
+          "asserted. Returns a summary with total, created, skipped (entity already " <>
+          "exists), failed counts, and a per-entity result list. Use this when an " <>
+          "agent needs to record 10-20 findings at once without paying the per-call " <>
+          "LLM token overhead of cqr_assert.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "entities" => %{
+            "type" => "array",
+            "description" =>
+              "Array of entity objects to assert. Each object has the same fields " <>
+                "as a cqr_assert call: entity (required), type (required), description " <>
+                "(required), intent (required), derived_from (required), scope (optional), " <>
+                "confidence (optional), relationships (optional).",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "entity" => %{"type" => "string"},
+                "type" => %{"type" => "string"},
+                "description" => %{"type" => "string"},
+                "intent" => %{"type" => "string"},
+                "derived_from" => %{"type" => "string"},
+                "scope" => %{"type" => "string"},
+                "confidence" => %{"type" => "number"},
+                "relationships" => %{"type" => "string"}
+              },
+              "required" => ["entity", "type", "description", "intent", "derived_from"]
+            }
+          }
+        },
+        "required" => ["entities"]
+      }
+    }
+  end
+
   defp trace_tool do
     %{
       "name" => "cqr_trace",
@@ -325,6 +382,59 @@ defmodule CqrMcp.Tools do
         "required" => ["entity", "status"]
       }
     }
+  end
+
+  # --- Batch execution ---
+
+  defp execute_single_assert(entity_args, context) when is_map(entity_args) do
+    entity_ref = entity_args["entity"] || "<unknown>"
+
+    case build_assert_expression(entity_args) do
+      {:ok, expression, relationships} ->
+        enriched = Map.put(context, :relationships, relationships)
+
+        case Cqr.Engine.execute(expression, enriched) do
+          {:ok, result} ->
+            %{"entity" => entity_ref, "status" => "created", "data" => format_result(result)}
+
+          {:error, %Cqr.Error{code: :entity_exists} = err} ->
+            %{"entity" => entity_ref, "status" => "skipped", "error" => err.message}
+
+          {:error, %Cqr.Error{} = err} ->
+            %{
+              "entity" => entity_ref,
+              "status" => "failed",
+              "code" => error_code_to_int(err.code),
+              "error" => err.message
+            }
+        end
+
+      {:error, err} ->
+        %{
+          "entity" => entity_ref,
+          "status" => "failed",
+          "code" => err["code"],
+          "error" => err["message"]
+        }
+    end
+  end
+
+  defp execute_single_assert(_other, _context) do
+    %{
+      "entity" => "<invalid>",
+      "status" => "failed",
+      "code" => -32_602,
+      "error" => "entity entry must be a JSON object"
+    }
+  end
+
+  defp summarize_batch(results) do
+    counts =
+      Enum.reduce(results, %{"created" => 0, "skipped" => 0, "failed" => 0}, fn r, acc ->
+        Map.update(acc, r["status"], 1, &(&1 + 1))
+      end)
+
+    Map.merge(counts, %{"total" => length(results), "results" => results})
   end
 
   # --- Expression builders ---
