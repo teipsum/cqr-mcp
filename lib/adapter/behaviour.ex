@@ -30,11 +30,21 @@ defmodule Cqr.Adapter.Behaviour do
   @callback awareness(expression :: term(), scope_context :: term(), opts :: keyword()) ::
               {:ok, term()} | {:error, term()}
 
+  @callback hypothesize(expression :: term(), scope_context :: term(), opts :: keyword()) ::
+              {:ok, term()} | {:error, term()}
+
   @callback normalize(raw_results :: term(), metadata :: term()) :: term()
 
   @callback health_check() :: :ok | {:error, term()}
 
   @callback capabilities() :: [atom()]
 
-  @optional_callbacks [assert: 3, trace: 3, signal: 3, refresh_check: 3, awareness: 3]
+  @optional_callbacks [
+    assert: 3,
+    trace: 3,
+    signal: 3,
+    refresh_check: 3,
+    awareness: 3,
+    hypothesize: 3
+  ]
 end
