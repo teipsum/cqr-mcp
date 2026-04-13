@@ -11,11 +11,15 @@ defmodule Cqr.Parser.Assert do
         DERIVED_FROM entity:ns:name [, entity:ns:name, ...]
         [IN scope:seg1[:seg2]]
         [CONFIDENCE <score>]
+        [RELATIONSHIPS REL_TYPE:entity:ns:name:<score> [, ...]]
 
   Clauses after the entity may appear in any order to accommodate LLM
   generation variance. The parser populates whichever clauses are present;
   presence of the required clauses (TYPE, DESCRIPTION, INTENT, DERIVED_FROM)
   is validated at the engine layer with informative errors.
+
+  Valid relationship types: CORRELATES_WITH, CONTRIBUTES_TO, DEPENDS_ON,
+  CAUSES, PART_OF.
   """
 
   import NimbleParsec
@@ -79,6 +83,47 @@ defmodule Cqr.Parser.Assert do
     |> label("CONFIDENCE clause")
   end
 
+  def relationship_type do
+    choice([
+      string("CORRELATES_WITH"),
+      string("CONTRIBUTES_TO"),
+      string("DEPENDS_ON"),
+      string("CAUSES"),
+      string("PART_OF")
+    ])
+    |> label("relationship type (CORRELATES_WITH, CONTRIBUTES_TO, DEPENDS_ON, CAUSES, PART_OF)")
+  end
+
+  def relationship do
+    relationship_type()
+    |> ignore(string(":"))
+    |> concat(Terminals.entity())
+    |> ignore(string(":"))
+    |> concat(Terminals.score())
+    |> reduce({__MODULE__, :to_relationship, []})
+    |> label("relationship (TYPE:entity:ns:name:strength)")
+  end
+
+  def to_relationship([type, {ns, name}, strength]) do
+    %{type: type, target: {ns, name}, strength: strength}
+  end
+
+  def relationships_clause do
+    ignore(string("RELATIONSHIPS"))
+    |> ignore(Terminals.sp())
+    |> concat(relationship())
+    |> repeat(
+      ignore(Terminals.optional_sp())
+      |> ignore(string(","))
+      |> ignore(Terminals.optional_sp())
+      |> concat(relationship())
+    )
+    |> reduce({__MODULE__, :collect_relationships, []})
+    |> label("RELATIONSHIPS clause")
+  end
+
+  def collect_relationships(rels), do: {:relationships, rels}
+
   def optional_clause do
     choice([
       type_clause(),
@@ -86,7 +131,8 @@ defmodule Cqr.Parser.Assert do
       intent_clause(),
       derived_from_clause(),
       in_clause(),
-      confidence_clause()
+      confidence_clause(),
+      relationships_clause()
     ])
   end
 
@@ -114,6 +160,7 @@ defmodule Cqr.Parser.Assert do
       {:derived_from, list}, acc -> %{acc | derived_from: list}
       {:scope, scope}, acc -> %{acc | scope: scope}
       {:confidence, score}, acc -> %{acc | confidence: score}
+      {:relationships, rels}, acc -> %{acc | relationships: rels}
     end)
   end
 end

@@ -37,14 +37,24 @@ defmodule Cqr.Assert do
 
   ## Relationships
 
-  The optional `relationships` parameter on the MCP tool (typed relationship
-  edges to existing entities) is **not** part of the CQR expression syntax
-  and therefore not part of this AST. The MCP tool layer parses it from a
-  comma-delimited shorthand and passes it to the engine through the context
-  map (`context[:relationships]`), which forwards it to the adapter.
+  The optional `RELATIONSHIPS` clause in the CQR expression populates the
+  `:relationships` field — a list of typed edges to existing entities,
+  each shaped as `%{type: String.t(), target: entity_ref(), strength: float()}`.
+  Valid types: `CORRELATES_WITH`, `CONTRIBUTES_TO`, `DEPENDS_ON`, `CAUSES`,
+  `PART_OF`. Strength is 0.0–1.0.
+
+  For backward compatibility, the MCP tool layer may also pass a parsed
+  relationships list through the engine context (`context[:relationships]`);
+  the engine prefers the AST's relationships when present.
   """
 
   @type entity_ref :: {String.t(), String.t()}
+
+  @type relationship :: %{
+          type: String.t(),
+          target: entity_ref(),
+          strength: float()
+        }
 
   @type t :: %__MODULE__{
           entity: entity_ref(),
@@ -53,7 +63,8 @@ defmodule Cqr.Assert do
           intent: String.t() | nil,
           derived_from: [entity_ref()] | nil,
           scope: [String.t()] | nil,
-          confidence: float() | nil
+          confidence: float() | nil,
+          relationships: [relationship()] | nil
         }
 
   defstruct [
@@ -63,6 +74,7 @@ defmodule Cqr.Assert do
     :intent,
     :derived_from,
     :scope,
-    :confidence
+    :confidence,
+    :relationships
   ]
 end

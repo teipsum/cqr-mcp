@@ -94,6 +94,26 @@ defmodule Cqr.Integration.AssertTest do
       assert result.quality.confidence == 0.85
     end
 
+    test "via CQR expression with RELATIONSHIPS clause writes typed edges" do
+      expr =
+        minimal_assert("case3b_expr_rels") <>
+          " RELATIONSHIPS CORRELATES_WITH:entity:product:nps:0.7," <>
+          "DEPENDS_ON:entity:product:feature_adoption:0.5"
+
+      assert {:ok, _} = Engine.execute(expr, @product_context)
+
+      assert {:ok, rows} =
+               GrafeoServer.query(
+                 "MATCH (e:Entity {namespace: 'test_assert', name: 'case3b_expr_rels'})" <>
+                   "-[r]->(t:Entity) " <>
+                   "WHERE type(r) <> 'DERIVED_FROM' " <>
+                   "RETURN type(r) AS rel_type, r.strength, t.name"
+               )
+
+      rel_types = rows |> Enum.map(& &1["rel_type"]) |> Enum.sort()
+      assert rel_types == ["CORRELATES_WITH", "DEPENDS_ON"]
+    end
+
     test "via the cqr_assert MCP tool with relationships" do
       args = %{
         "entity" => "entity:test_assert:case3_with_rels",
