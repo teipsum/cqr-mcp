@@ -44,7 +44,7 @@ To persist data across restarts:
 
     mix run --no-halt -- --persist
 
-Data is stored at `~/.cqr/grafeo.db`. Persistent mode starts with an empty database —
+Data is stored at `~/.cqr/grafeo.grafeo`. Persistent mode starts with an empty database —
 populate it with `cqr_assert` or adapter imports. To use a custom path:
 
     mix run --no-halt -- --persist /path/to/db

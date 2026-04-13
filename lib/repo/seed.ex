@@ -44,6 +44,63 @@ defmodule Cqr.Repo.Seed do
     end
   end
 
+  @doc """
+  Bootstrap an empty persistent database with the scope tree and a single
+  `entity:project:bootstrap` root entity.
+
+  Runs only if the database has zero Scope nodes (first boot of a new
+  persistent file). Subsequent boots see scopes already and skip.
+
+  This is intentionally smaller than `seed_direct/1` — persistent users
+  want their own data, not the 27-entity demo set. But ASSERT requires a
+  DERIVED_FROM target, so we plant one root entity to break the
+  chicken-and-egg.
+  """
+  def bootstrap_if_empty_direct(db) do
+    case Native.execute(db, "MATCH (s:Scope) RETURN count(s)") do
+      {:ok, [row]} when map_size(row) > 0 ->
+        [count] = Map.values(row)
+
+        if count == 0 do
+          Logger.info("Empty persistent database — creating scope tree and bootstrap entity")
+
+          with :ok <- seed_scopes(db),
+               :ok <- seed_bootstrap_entity(db) do
+            :ok
+          end
+        else
+          :ok
+        end
+
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp seed_bootstrap_entity(db) do
+    desc = "Root bootstrap entity for the CQR knowledge graph"
+    embedding_literal = format_embedding(pseudo_embedding("bootstrap #{desc}"))
+
+    q!(
+      db,
+      "INSERT (:Entity {" <>
+        "namespace: 'project', name: 'bootstrap', type: 'definition', " <>
+        "description: '#{escape(desc)}', owner: 'system', " <>
+        "reputation: 0.5, freshness_hours_ago: 0, certified: false, " <>
+        "embedding: #{embedding_literal}})"
+    )
+
+    q!(
+      db,
+      "MATCH (e:Entity {namespace: 'project', name: 'bootstrap'}), " <>
+        "(s:Scope {path: 'company'}) " <>
+        "INSERT (e)-[:IN_SCOPE {primary: true}]->(s)"
+    )
+  end
+
   # --- Scopes ---
 
   defp seed_scopes(db) do

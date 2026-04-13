@@ -1,0 +1,657 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2869
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\froman\fcharset0 Times-Bold;\f1\froman\fcharset0 Times-Roman;\f2\fnil\fcharset0 AppleColorEmoji;
+\f3\fmodern\fcharset0 Courier;\f4\froman\fcharset0 TimesNewRomanPSMT;\f5\fnil\fcharset0 Menlo-Regular;
+}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;\red109\green109\blue109;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;\cssrgb\c50196\c50196\c50196;}
+{\*\listtable{\list\listtemplateid1\listhybrid{\listlevel\levelnfc23\levelnfcn23\leveljc0\leveljcn0\levelfollow0\levelstartat0\levelspace360\levelindent0{\*\levelmarker \{disc\}}{\leveltext\leveltemplateid1\'01\uc0\u8226 ;}{\levelnumbers;}\fi-360\li720\lin720 }{\listname ;}\listid1}
+{\list\listtemplateid2\listhybrid{\listlevel\levelnfc0\levelnfcn0\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{decimal\}}{\leveltext\leveltemplateid101\'01\'00;}{\levelnumbers\'01;}\fi-360\li720\lin720 }{\listname ;}\listid2}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}{\listoverride\listid2\listoverridecount0\ls2}}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\deftab720
+\pard\pardeftab720\sa321\partightenfactor0
+
+\f0\b\fs48 \cf0 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 CQR MCP Server \'97 Bug Log\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f1\b0\fs24 \cf0 Comprehensive record of all bugs encountered during V1 development (April 10\'9612, 2026). Ordered chronologically by discovery date. Each entry includes root cause, fix status, and commit reference.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-001: DISCOVER N+1 Query Pattern (Performance)\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u9989 
+\f1  FIXED \'97 commit 
+\f3\fs26 d619b36
+\f1\fs24  
+\f0\b Severity:
+\f1\b0  High \'97 caused apparent hangs on entities with >10 outbound edges 
+\f0\b Discovered:
+\f1\b0  April 11, 2026\
+
+\f0\b Symptom:
+\f1\b0  Outbound DISCOVER on high-edge-count entities appeared to hang indefinitely. An entity with 10+ outbound edges would never return.\
+
+\f0\b Root cause:
+\f1\b0  
+\f3\fs26 Cqr.Repo.Semantic.related_entities/3
+\f1\fs24  issued one extra Cypher query per returned row to check scope visibility (an N+1 pattern in 
+\f3\fs26 maybe_filter_entities_by_scope
+\f1\fs24 ). A hub entity with N outbound edges fired N+1 serialized NIF round trips through the Grafeo GenServer. Past ~10k edges, the accumulated cost pushed DISCOVER past the 30s GenServer call timeout.\
+
+\f0\b Fix:
+\f1\b0  Rewrote 
+\f3\fs26 related_entities/related_entities_inbound
+\f1\fs24  as a single scope-filtered Cypher query. Inlined the IN_SCOPE join into the traversal MATCH with 
+\f3\fs26 WHERE s.path IN [...]
+\f1\fs24  filter. Added 
+\f3\fs26 RETURN DISTINCT
+\f1\fs24  to collapse Cartesian-product rows from multi-scope entities. Added LIMIT for bounded result sets.\
+
+\f0\b Performance:
+\f1\b0  10,000-edge hub: 472ms (N+1) 
+\f4 \uc0\u8594 
+\f1  38ms (single query). 12x improvement.\
+
+\f0\b Tests added:
+\f1\b0  
+\f3\fs26 test/integration/discover_high_degree_test.exs
+\f1\fs24  \'97 hubs with 100, 1000, and 10000 DERIVED_FROM edges.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-002: Jason Serialization Crash on Elixir Tuples (Critical)\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u9989 
+\f1  FIXED \'97 commit 
+\f3\fs26 004b78f
+\f1\fs24  
+\f0\b Severity:
+\f1\b0  Critical \'97 all MCP responses with duplicate edge targets appeared to hang 
+\f0\b Discovered:
+\f1\b0  April 11, 2026 (root cause found after ~8 hours of debugging)\
+
+\f0\b Symptom:
+\f1\b0  Outbound DISCOVER hangs when an entity has two different relationship types pointing to the SAME target entity (e.g., DERIVED_FROM 
+\f4 \uc0\u8594 
+\f1  nps AND DEPENDS_ON 
+\f4 \uc0\u8594 
+\f1  nps). The query worked in 
+\f3\fs26 mix run -e
+\f1\fs24  and 
+\f3\fs26 mix test
+\f1\fs24  but hung through MCP.\
+
+\f0\b Root cause:
+\f1\b0  When DISCOVER returned duplicate edge targets (same entity reached by DERIVED_FROM + typed relationship), 
+\f3\fs26 Engine.merge_results
+\f1\fs24  built a 
+\f3\fs26 conflicts
+\f1\fs24  list containing nested maps with 
+\f3\fs26 entity: \{"product", "nps"\}
+\f1\fs24  tuples. 
+\f3\fs26 format_value/1
+\f1\fs24  in 
+\f3\fs26 CqrMcp.Tools
+\f1\fs24  lacked a clause for plain maps, so nested maps kept raw tuples. 
+\f3\fs26 Jason.encode!
+\f1\fs24  crashed with 
+\f3\fs26 Protocol.UndefinedError
+\f1\fs24  in the spawned handler process. No response was written to stdout. The MCP client waited forever.\
+
+\f0\b Why other environments worked:
+\f1\b0 \
+\pard\tx220\tx720\pardeftab720\li720\fi-720\partightenfactor0
+\ls1\ilvl0
+\f3\fs26 \cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 mix run -e
+\f1\fs24 : result is inspected via 
+\f3\fs26 IO.inspect
+\f1\fs24 , not JSON-encoded\
+\ls1\ilvl0
+\f3\fs26 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 mix test
+\f1\fs24 : tests assert on Elixir structs, not JSON\
+\pard\tx220\tx720\pardeftab720\li720\fi-720\partightenfactor0
+\ls1\ilvl0\cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 MCP: 
+\f3\fs26 Jason.encode!
+\f1\fs24  crashes silently in spawned process, no response written\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b \cf0 Failed fix attempts (chronological):
+\f1\b0 \
+\pard\tx220\tx720\pardeftab720\li720\fi-720\partightenfactor0
+\ls2\ilvl0\cf0 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	1	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 3s GenServer.call timeout \'97 NIF blocks GenServer; timeout fires on caller but GenServer is wedged permanently\
+\ls2\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	2	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Task.async + Task.yield(3_000) \'97 Task.shutdown(:brutal_kill) hangs because BEAM can't kill process inside NIF\
+\ls2\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	3	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 spawn + receive/after 3_000 \'97 Same NIF preemption issue\
+\ls2\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	4	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Async handle_info with spawn \'97 Caused request ordering race condition\
+\ls2\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	5	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 NIF dirty scheduling investigation \'97 Already DirtyIo; not the cause\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b \cf0 Fix:
+\f1\b0  9 lines \'97 added 
+\f3\fs26 defp format_value(%\{\} = map) when not is_struct(map)
+\f1\fs24  clause to recursively normalize nested maps before JSON serialization.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-003: Zombie BEAM Processes Serving Stale Code (Operational)\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u9989 
+\f1  RESOLVED \'97 operational procedure documented 
+\f0\b Severity:
+\f1\b0  High \'97 caused hours of false debugging 
+\f0\b Discovered:
+\f1\b0  April 11, 2026\
+
+\f0\b Symptom:
+\f1\b0  Code fixes confirmed by 
+\f3\fs26 mix test
+\f1\fs24  appeared to have no effect when tested through MCP. Features that passed all tests would hang or behave incorrectly through the live MCP server.\
+
+\f0\b Root cause:
+\f1\b0  Multiple BEAM processes accumulated from parallel Claude Code sessions, each running 
+\f3\fs26 mix run --no-halt
+\f1\fs24 . Up to 14 simultaneous BEAM processes observed. Claude Desktop connected to whichever process happened to be listening, usually an old one compiled hours earlier without the latest fixes.\
+
+\f0\b Fix:
+\f1\b0  Operational procedure: always run 
+\f3\fs26 pkill -9 -f "beam.smp"
+\f1\fs24  before testing. Verify with 
+\f3\fs26 ps aux | grep beam | grep -v grep
+\f1\fs24 . Only then start a fresh 
+\f3\fs26 mix run --no-halt
+\f1\fs24 .\
+
+\f0\b Impact:
+\f1\b0  This single operational issue consumed approximately 6 hours of debugging time across the two-day build session, as bugs appeared to persist after fixes were merged and compiled.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-004: Grafeo NIF Blocks BEAM Scheduler (Architectural Constraint)\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u9888 \u65039 
+\f1  KNOWN CONSTRAINT \'97 documented, not fixable at application layer 
+\f0\b Severity:
+\f1\b0  Medium \'97 affects timeout mechanisms 
+\f0\b Discovered:
+\f1\b0  April 11, 2026\
+
+\f0\b Description:
+\f1\b0  The Grafeo NIF is scheduled as 
+\f3\fs26 DirtyIo
+\f1\fs24 . While this frees normal scheduler threads, the BEAM still cannot preempt, interrupt, or kill a process executing inside the NIF. This means all Elixir-side timeout mechanisms (GenServer.call timeout, Task.yield, Task.shutdown(:brutal_kill), receive/after) cannot catch a NIF that hangs \'97 they fire on the caller side but the NIF-executing process never checks its mailbox until the native code returns.\
+
+\f0\b Mitigation:
+\f1\b0  The 3s handler timeout in 
+\f3\fs26 handler.ex
+\f1\fs24  uses 
+\f3\fs26 spawn + receive/after 3_000
+\f1\fs24 . If the NIF returns within 3 seconds, the timeout works correctly. If the NIF itself hangs (which has not been observed with the Jason fix), the spawned process is orphaned. The MCP handler returns a clean timeout error regardless.\
+
+\f0\b Impact on development:
+\f1\b0  This constraint invalidated four successive timeout implementation attempts (BUG-002 failed fixes #1-4) before the actual root cause (Jason serialization) was identified.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-005: Free-Text DISCOVER Doesn't Find Asserted Entities\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u55357 \u56628 
+\f1  OPEN \'97 prompt written, not yet fixed 
+\f0\b Severity:
+\f1\b0  Medium \'97 asserted entities invisible to BM25/vector DISCOVER 
+\f0\b Discovered:
+\f1\b0  April 12, 2026\
+
+\f0\b Symptom:
+\f1\b0  Entities created via 
+\f3\fs26 cqr_assert
+\f1\fs24  are fully accessible via RESOLVE and graph DISCOVER (outbound/inbound), but do NOT appear in free-text DISCOVER results. BM25 and HNSW vector search only return seeded entities, never asserted ones.\
+
+\f0\b Reproduction:
+\f1\b0 \
+\pard\pardeftab720\partightenfactor0
+
+\f3\fs26 \cf0 ASSERT entity:project:test TYPE policy DESCRIPTION "worktree management policy" ...\
+DISCOVER "worktree"  
+\f5 \uc0\u8594 
+\f3  returns seeded entities only, not the asserted entity\
+RESOLVE entity:project:test 
+\f5 \uc0\u8594 
+\f3  works correctly\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b\fs24 \cf0 Likely root cause:
+\f1\b0  The free-text DISCOVER path runs a scope-filtered Cypher query to get the candidate set, then computes BM25 and vector similarity in Elixir. Asserted entities at the root 
+\f3\fs26 company
+\f1\fs24  scope may not match the scope filter correctly in the 
+\f3\fs26 search_discover
+\f1\fs24  Cypher query path, even though the root scope IS in the visible scopes list.\
+
+\f0\b Prompt written:
+\f1\b0  
+\f3\fs26 /mnt/user-data/outputs/fix-freetext-discover-asserted-prompt.md
+\f1\fs24 \
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-006: blog-post-draft.md Committed to Public Repository\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u55357 \u56628 
+\f1  OPEN \'97 needs removal 
+\f0\b Severity:
+\f1\b0  Low \'97 internal content in public repo 
+\f0\b Discovered:
+\f1\b0  April 12, 2026\
+
+\f0\b Description:
+\f1\b0  
+\f3\fs26 docs/blog-post-draft.md
+\f1\fs24  is committed to the public GitHub repository. This file contains internal marketing content that should not be in the public repo.\
+
+\f0\b Fix:
+\f1\b0  
+\f3\fs26 git rm --cached docs/blog-post-draft.md
+\f1\fs24  + add to 
+\f3\fs26 .gitignore
+\f1\fs24 . Do not delete the local file.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-007: MCP Tool Description Non-ASCII Characters\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u9989 
+\f1  FIXED \'97 commit 
+\f3\fs26 9a0a70a
+\f1\fs24  
+\f0\b Severity:
+\f1\b0  Low \'97 could cause MCP client parsing issues 
+\f0\b Discovered:
+\f1\b0  April 11, 2026\
+
+\f0\b Description:
+\f1\b0  MCP tool descriptions in 
+\f3\fs26 lib/cqr_mcp/tools.ex
+\f1\fs24  originally contained em-dashes (\'97), smart quotes, and Unicode arrows. Some MCP clients may not handle non-ASCII in tool descriptions correctly.\
+
+\f0\b Fix:
+\f1\b0  All tool descriptions rewritten to use pure ASCII characters. Verified during the TRACE/SIGNAL/REFRESH implementation.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-008: handler_test.exs Hardcoded Tool Count\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u9989 
+\f1  FIXED \'97 commit 
+\f3\fs26 9a0a70a
+\f1\fs24  
+\f0\b Severity:
+\f1\b0  Low \'97 test failure only, not a runtime bug 
+\f0\b Discovered:
+\f1\b0  April 11, 2026\
+
+\f0\b Description:
+\f1\b0  
+\f3\fs26 test/cqr_mcp/handler_test.exs
+\f1\fs24  asserted 
+\f3\fs26 length(tools) == 4
+\f1\fs24  but TRACE/SIGNAL/REFRESH added 3 more tools (total 7). The hardcoded count caused 2 test failures.\
+
+\f0\b Fix:
+\f1\b0  Updated to 
+\f3\fs26 length(tools) == 7
+\f1\fs24  and added assertions for the three new tool names.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-009: Async MCP Handler Race Condition\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u9989 
+\f1  FIXED \'97 reverted approach 
+\f0\b Severity:
+\f1\b0  Medium \'97 requests processed out of order 
+\f0\b Discovered:
+\f1\b0  April 11, 2026\
+
+\f0\b Description:
+\f1\b0  An attempt to fix the MCP hang (BUG-002) by making 
+\f3\fs26 handle_info
+\f1\fs24  async via 
+\f3\fs26 spawn
+\f1\fs24  caused DISCOVER requests to fire before ASSERT operations completed. The MCP server's request ordering guarantee was broken.\
+
+\f0\b Root cause:
+\f1\b0  When 
+\f3\fs26 handle_info
+\f1\fs24  spawns an unlinked process for each request, sequential requests (ASSERT then immediately DISCOVER) execute concurrently. The DISCOVER can run before the ASSERT's Grafeo writes commit.\
+
+\f0\b Fix:
+\f1\b0  Reverted to synchronous 
+\f3\fs26 handle_info
+\f1\fs24 . The actual hang was caused by BUG-002 (Jason crash), not by blocking I/O.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-010: Scope Enforcement for ASSERT Scope Parameter\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u9989 
+\f1  WORKING AS DESIGNED \'97 documented 
+\f0\b Severity:
+\f1\b0  N/A \'97 behavior is correct 
+\f0\b Discovered:
+\f1\b0  April 11, 2026 (during MCP testing)\
+
+\f0\b Description:
+\f1\b0  Root agent (
+\f3\fs26 scope:company
+\f1\fs24 ) can ASSERT into descendant scopes like 
+\f3\fs26 scope:company:hr
+\f1\fs24 . Initially flagged as a potential bug (MCP test T17), but this is correct behavior \'97 the root scope has visibility to all descendants, and writing into a descendant scope you can see is a valid governance operation.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-011: Grafeo v0.5 Inline Cosine Similarity Gap\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u9888 \u65039 
+\f1  KNOWN LIMITATION \'97 workaround in place 
+\f0\b Severity:
+\f1\b0  Low \'97 affects performance at scale, not correctness 
+\f0\b Discovered:
+\f1\b0  April 8, 2026 (during patent validation)\
+
+\f0\b Description:
+\f1\b0  Grafeo v0.5.34 does not support inline cosine similarity computation within Cypher queries. The CQR adapter works around this by retrieving embedding properties and computing cosine similarity in Elixir application code.\
+
+\f0\b Impact:
+\f1\b0  At small dataset sizes (thousands of entities per scope), this is fast. At millions of entities, this would require Grafeo to support native vector queries inside Cypher.\
+
+\f0\b Workaround:
+\f1\b0  Application-layer cosine similarity in 
+\f3\fs26 lib/adapter/grafeo.ex
+\f1\fs24 . Documented in the patent as a v0.5 gap.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 BUG-012: ETS Scope Tree Stale After Direct Grafeo Writes\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\fs24 \cf0 Status:
+\f1\b0  
+\f2 \uc0\u9888 \u65039 
+\f1  KNOWN LIMITATION \'97 by design for V1 
+\f0\b Severity:
+\f1\b0  Low \'97 only affects non-standard write paths 
+\f0\b Discovered:
+\f1\b0  April 11, 2026\
+
+\f0\b Description:
+\f1\b0  The scope tree is loaded into ETS on startup and invalidated by CERTIFY operations that modify the scope hierarchy. However, if scope nodes are created directly via Grafeo Cypher queries (bypassing the engine), the ETS cache becomes stale until the next restart.\
+
+\f0\b Impact:
+\f1\b0  Not a real-world issue \'97 all scope modifications go through the engine in production. Only affects development/debugging where raw Cypher is used to manipulate scope nodes.\
+\pard\pardeftab720\partightenfactor0
+\cf3 \strokec3 \
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 \strokec2 Summary\
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrt\brdrnil \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+
+\fs24 \cf0 Bug\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 Severity\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 Status\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 Root Cause\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f1\b0 \cf0 BUG-001\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 High\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u9989 
+\f1  Fixed\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 N+1 scope query per edge\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-002\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Critical\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u9989 
+\f1  Fixed\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Jason crash on tuples in nested maps\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-003\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 High\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u9989 
+\f1  Resolved\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Zombie BEAM processes from parallel sessions\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-004\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Medium\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u9888 \u65039 
+\f1  Constraint\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 NIF blocks BEAM scheduler, timeouts ineffective\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-005\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Medium\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u55357 \u56628 
+\f1  Open\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Free-text DISCOVER scope filter for asserted entities\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-006\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Low\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u55357 \u56628 
+\f1  Open\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 blog-post-draft.md in public repo\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-007\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Low\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u9989 
+\f1  Fixed\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Non-ASCII in MCP tool descriptions\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-008\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Low\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u9989 
+\f1  Fixed\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Hardcoded tool count in tests\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-009\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Medium\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u9989 
+\f1  Fixed\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Async handler broke request ordering\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-010\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 N/A\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u9989 
+\f1  By design\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Root agent ASSERT into descendant scopes\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-011\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Low\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u9888 \u65039 
+\f1  Workaround\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Grafeo v0.5 no inline cosine similarity\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrt\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth946\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2160
+\clvertalc \clshdrawnil \clwWidth839\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth1574\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6480
+\clvertalc \clshdrawnil \clwWidth5172\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 BUG-012\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Low\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 \uc0\u9888 \u65039 
+\f1  By design\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 ETS scope cache stale on direct Grafeo writes\cell \lastrow\row
+}

@@ -53,7 +53,11 @@ defmodule CqrMcp.Application do
     end
   end
 
-  defp default_db_path, do: Path.expand("~/.cqr/grafeo.db")
+  # Grafeo auto-detects single-file vs WAL-directory storage from the
+  # file extension. `.grafeo` triggers SingleFile; anything else (e.g.
+  # `.db`) silently falls through to WAL-directory mode and operates
+  # in-memory without writing to disk. Keep the extension load-bearing.
+  defp default_db_path, do: Path.expand("~/.cqr/grafeo.grafeo")
 
   # Generate a session id and capture the boot timestamps once at startup,
   # stash them in :persistent_term so the cqr://session resource can read

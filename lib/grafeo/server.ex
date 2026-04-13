@@ -52,8 +52,15 @@ defmodule Cqr.Grafeo.Server do
       {:ok, db} ->
         Logger.info("Grafeo embedded database started (#{storage_label(storage)})")
 
-        if seed do
-          Seed.seed_if_empty_direct(db)
+        cond do
+          seed ->
+            Seed.seed_if_empty_direct(db)
+
+          match?({:path, _}, storage) ->
+            Seed.bootstrap_if_empty_direct(db)
+
+          true ->
+            :ok
         end
 
         {:ok, %{db: db, storage: storage}}
