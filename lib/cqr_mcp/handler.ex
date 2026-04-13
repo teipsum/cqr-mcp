@@ -9,7 +9,6 @@ defmodule CqrMcp.Handler do
 
   @mcp_version "2024-11-05"
   @server_name "cqr_mcp"
-  @server_version "0.1.0"
 
   @doc """
   Handle a parsed JSON-RPC request map. Returns a response map or nil for notifications.
@@ -45,7 +44,7 @@ defmodule CqrMcp.Handler do
        },
        "serverInfo" => %{
          "name" => @server_name,
-         "version" => @server_version
+         "version" => server_version()
        }
      }}
   end
@@ -63,14 +62,16 @@ defmodule CqrMcp.Handler do
     caller = self()
     ref = make_ref()
 
-    pid =
-      spawn(fn ->
+    {pid, mon_ref} =
+      spawn_monitor(fn ->
         result = CqrMcp.Tools.call(name, args, context)
         send(caller, {ref, result})
       end)
 
     receive do
       {^ref, {:ok, result}} ->
+        Process.demonitor(mon_ref, [:flush])
+
         {:result,
          %{
            "content" => [
@@ -82,6 +83,8 @@ defmodule CqrMcp.Handler do
          }}
 
       {^ref, {:error, error}} ->
+        Process.demonitor(mon_ref, [:flush])
+
         {:result,
          %{
            "content" => [
@@ -92,14 +95,23 @@ defmodule CqrMcp.Handler do
            ],
            "isError" => true
          }}
+
+      {:DOWN, ^mon_ref, :process, ^pid, reason} ->
+        {:error,
+         %{
+           "code" => -32_000,
+           "message" => "Tool execution crashed",
+           "data" => %{"reason" => inspect(reason)}
+         }}
     after
-      3_000 ->
+      30_000 ->
         Process.exit(pid, :kill)
+        Process.demonitor(mon_ref, [:flush])
 
         {:error,
          %{
            "code" => -32_000,
-           "message" => "Query timed out after 3 seconds",
+           "message" => "Query timed out after 30 seconds",
            "data" => %{
              "retry_guidance" => "Simplify the query, reduce depth, or narrow scope"
            }
@@ -165,5 +177,12 @@ defmodule CqrMcp.Handler do
       end
 
     %{scope: scope, agent_id: System.get_env("CQR_AGENT_ID", "anonymous")}
+  end
+
+  defp server_version do
+    case Application.spec(:cqr_mcp, :vsn) do
+      nil -> "0.0.0"
+      vsn -> to_string(vsn)
+    end
   end
 end
