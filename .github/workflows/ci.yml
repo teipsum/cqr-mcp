@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        elixir: ["1.19"]
+        elixir: ["1.19.5"]
         otp: ["28"]
     steps:
       - name: Checkout

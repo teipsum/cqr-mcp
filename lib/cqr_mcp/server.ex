@@ -41,6 +41,7 @@ defmodule CqrMcp.Server do
     spawn(fn -> process_message(line) end)
     {:noreply, state}
   end
+
   def handle_info(_, state), do: {:noreply, state}
 
   defp process_message(line) do
