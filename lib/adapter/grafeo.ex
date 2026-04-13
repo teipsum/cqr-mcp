@@ -26,7 +26,8 @@ defmodule Cqr.Adapter.Grafeo do
       :awareness,
       :hypothesize,
       :compare,
-      :anchor
+      :anchor,
+      :update
     ]
 
   @impl true
@@ -419,10 +420,11 @@ defmodule Cqr.Adapter.Grafeo do
          code: :entity_exists,
          message:
            "Entity #{formatted} already exists. Use CERTIFY to update governance " <>
-             "status or SIGNAL to update quality.",
+             "status, SIGNAL to update quality, or UPDATE to evolve the entity content.",
          details: %{namespace: ns, name: name},
          retry_guidance:
-           "Choose a different entity name, or use CERTIFY/SIGNAL on the existing entity."
+           "Choose a different entity name, or use CERTIFY/SIGNAL/UPDATE on the " <>
+             "existing entity."
        }}
     else
       :ok
@@ -778,10 +780,12 @@ defmodule Cqr.Adapter.Grafeo do
          {:ok, assertion} <- fetch_assertion_record(ns, name),
          {:ok, cert_history} <- fetch_certification_history(ns, name),
          {:ok, signal_history} <- fetch_signal_history(ns, name),
+         {:ok, version_history} <- fetch_version_history(ns, name),
          {:ok, derived_chain} <- fetch_derived_from_chain(ns, name, expression.causal_depth),
          {:ok, referenced} <- fetch_referenced_by(ns, name) do
       filtered_certs = apply_time_window(cert_history, expression.time_window)
       filtered_signals = apply_time_window(signal_history, expression.time_window)
+      filtered_versions = apply_time_window(version_history, expression.time_window)
 
       trace_row = %{
         entity: Cqr.Types.format_entity(expression.entity),
@@ -789,6 +793,7 @@ defmodule Cqr.Adapter.Grafeo do
         assertion: assertion,
         certification_history: filtered_certs,
         signal_history: filtered_signals,
+        version_history: filtered_versions,
         derived_from_chain: derived_chain,
         referenced_by: referenced
       }
@@ -912,6 +917,40 @@ defmodule Cqr.Adapter.Grafeo do
               previous_reputation: row["sr.previous_reputation"],
               new_reputation: row["sr.new_reputation"],
               evidence: nilify_empty(row["sr.evidence"])
+            }
+          end)
+          |> Enum.sort_by(& &1.timestamp)
+
+        {:ok, history}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_version_history(ns, name) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})-[:PREVIOUS_VERSION]->" <>
+        "(vr:VersionRecord) " <>
+        "RETURN vr.timestamp, vr.agent_id, vr.change_type, vr.evidence, " <>
+        "vr.previous_description, vr.previous_type, vr.previous_status, " <>
+        "vr.previous_reputation, vr.previous_confidence"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        history =
+          rows
+          |> Enum.map(fn row ->
+            %{
+              timestamp: row["vr.timestamp"],
+              agent: row["vr.agent_id"],
+              change_type: row["vr.change_type"],
+              evidence: nilify_empty(row["vr.evidence"]),
+              previous_description: nilify_empty(row["vr.previous_description"]),
+              previous_type: nilify_empty(row["vr.previous_type"]),
+              previous_status: nilify_empty(row["vr.previous_status"]),
+              previous_reputation: row["vr.previous_reputation"],
+              previous_confidence: row["vr.previous_confidence"]
             }
           end)
           |> Enum.sort_by(& &1.timestamp)
@@ -2039,6 +2078,354 @@ defmodule Cqr.Adapter.Grafeo do
         reputation: assessment.weakest_link_confidence,
         confidence: assessment.chain_confidence,
         provenance: provenance
+      }
+    }
+  end
+
+  # --- UPDATE ---
+
+  @impl true
+  def update(%Cqr.Update{entity: {ns, name}} = expression, _scope_context, opts) do
+    agent_id = Keyword.get(opts, :agent_id, "anonymous")
+    previous = Keyword.get(opts, :previous, %{})
+    previous_status = Keyword.get(opts, :previous_status)
+    mode = Keyword.get(opts, :mode)
+    now = DateTime.utc_now()
+    timestamp = DateTime.to_iso8601(now)
+
+    with {:ok, prev_confidence} <- fetch_previous_confidence(ns, name) do
+      snapshot = %{
+        description: previous[:description],
+        type: previous[:type],
+        status: previous_status,
+        reputation: previous[:reputation],
+        confidence: prev_confidence
+      }
+
+      apply_update_mode(mode, expression, agent_id, snapshot, timestamp, now)
+    end
+  end
+
+  defp apply_update_mode(
+         {:apply, apply_opts},
+         %Cqr.Update{entity: {ns, name}} = expression,
+         agent_id,
+         snapshot,
+         timestamp,
+         now
+       ) do
+    reset_cert = Keyword.get(apply_opts, :reset_cert, false)
+    reset_reputation = Keyword.get(apply_opts, :reset_reputation, false)
+
+    with {:ok, record_id} <- generate_version_record_id(),
+         :ok <- write_version_record(expression, agent_id, record_id, snapshot, timestamp),
+         :ok <- write_previous_version_edge({ns, name}, record_id),
+         :ok <-
+           apply_entity_update(
+             expression,
+             snapshot,
+             reset_cert: reset_cert,
+             reset_reputation: reset_reputation
+           ) do
+      {:ok, build_update_applied_result(expression, agent_id, snapshot, record_id, now)}
+    end
+  end
+
+  defp apply_update_mode(
+         :pending_review,
+         %Cqr.Update{entity: {ns, name}} = expression,
+         agent_id,
+         snapshot,
+         timestamp,
+         now
+       ) do
+    with {:ok, record_id} <- generate_version_record_id(),
+         :ok <-
+           write_pending_update_record(
+             expression,
+             agent_id,
+             record_id,
+             snapshot,
+             timestamp
+           ),
+         :ok <- write_pending_update_edge({ns, name}, record_id),
+         :ok <-
+           write_contest_certification_record(
+             expression,
+             agent_id,
+             snapshot.status,
+             timestamp
+           ),
+         :ok <- mark_entity_contested({ns, name}) do
+      {:ok, build_update_pending_result(expression, agent_id, snapshot, record_id, now)}
+    end
+  end
+
+  defp fetch_previous_confidence(ns, name) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}) RETURN e.confidence"
+
+    case GrafeoServer.query(query) do
+      {:ok, [row | _]} -> {:ok, row["e.confidence"]}
+      {:ok, []} -> {:ok, nil}
+      {:error, reason} -> {:error, %Cqr.Error{code: :adapter_error, message: inspect(reason)}}
+    end
+  end
+
+  defp generate_version_record_id do
+    <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)
+    c = Bitwise.bor(Bitwise.band(c, 0x0FFF), 0x4000)
+    d = Bitwise.bor(Bitwise.band(d, 0x3FFF), 0x8000)
+
+    uuid =
+      :io_lib.format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b", [a, b, c, d, e])
+      |> IO.iodata_to_binary()
+
+    {:ok, uuid}
+  end
+
+  defp write_version_record(
+         %Cqr.Update{entity: {ns, name}} = expression,
+         agent_id,
+         record_id,
+         snapshot,
+         timestamp
+       ) do
+    query =
+      "INSERT (:VersionRecord {" <>
+        "record_id: '#{record_id}', " <>
+        "entity_namespace: '#{ns}', entity_name: '#{name}', " <>
+        "agent_id: '#{escape(agent_id)}', " <>
+        "change_type: '#{expression.change_type}', " <>
+        "evidence: '#{escape(expression.evidence)}', " <>
+        "status: 'applied', " <>
+        "previous_description: '#{escape(snapshot.description)}', " <>
+        "previous_type: '#{escape(snapshot.type)}', " <>
+        "previous_status: '#{status_to_string(snapshot.status)}', " <>
+        "previous_reputation: #{snapshot.reputation || 0.0}, " <>
+        "previous_confidence: #{snapshot.confidence || 0.0}, " <>
+        "timestamp: '#{timestamp}'" <>
+        "})"
+
+    exec_write(query)
+  end
+
+  defp write_pending_update_record(
+         %Cqr.Update{entity: {ns, name}} = expression,
+         agent_id,
+         record_id,
+         snapshot,
+         timestamp
+       ) do
+    proposed_desc = expression.description || snapshot.description || ""
+    proposed_type = expression.type || snapshot.type || ""
+    proposed_conf = expression.confidence || snapshot.confidence || 0.0
+
+    query =
+      "INSERT (:VersionRecord {" <>
+        "record_id: '#{record_id}', " <>
+        "entity_namespace: '#{ns}', entity_name: '#{name}', " <>
+        "agent_id: '#{escape(agent_id)}', " <>
+        "change_type: '#{expression.change_type}', " <>
+        "evidence: '#{escape(expression.evidence)}', " <>
+        "status: 'pending_review', " <>
+        "previous_description: '#{escape(snapshot.description)}', " <>
+        "previous_type: '#{escape(snapshot.type)}', " <>
+        "previous_status: '#{status_to_string(snapshot.status)}', " <>
+        "previous_reputation: #{snapshot.reputation || 0.0}, " <>
+        "previous_confidence: #{snapshot.confidence || 0.0}, " <>
+        "proposed_description: '#{escape(proposed_desc)}', " <>
+        "proposed_type: '#{escape(proposed_type)}', " <>
+        "proposed_confidence: #{proposed_conf}, " <>
+        "timestamp: '#{timestamp}'" <>
+        "})"
+
+    exec_write(query)
+  end
+
+  defp write_previous_version_edge({ns, name}, record_id) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}), " <>
+        "(v:VersionRecord {record_id: '#{record_id}'}) " <>
+        "INSERT (e)-[:PREVIOUS_VERSION]->(v)"
+
+    exec_write(query)
+  end
+
+  defp write_pending_update_edge({ns, name}, record_id) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}), " <>
+        "(v:VersionRecord {record_id: '#{record_id}'}) " <>
+        "INSERT (e)-[:PENDING_UPDATE]->(v)"
+
+    exec_write(query)
+  end
+
+  defp apply_entity_update(
+         %Cqr.Update{entity: {ns, name}} = expression,
+         _snapshot,
+         opts
+       ) do
+    reset_cert = Keyword.get(opts, :reset_cert, false)
+    reset_reputation = Keyword.get(opts, :reset_reputation, false)
+
+    sets = []
+
+    sets =
+      if expression.description,
+        do: ["e.description = '#{escape(expression.description)}'" | sets],
+        else: sets
+
+    sets =
+      if expression.type,
+        do: ["e.type = '#{escape(expression.type)}'" | sets],
+        else: sets
+
+    sets =
+      if expression.confidence,
+        do: ["e.confidence = #{expression.confidence}" | sets],
+        else: sets
+
+    sets =
+      if reset_cert do
+        ["e.certification_status = ''", "e.certified = false" | sets]
+      else
+        sets
+      end
+
+    sets =
+      if reset_reputation,
+        do: ["e.reputation = 0.5" | sets],
+        else: sets
+
+    # If nothing would change and no reset was requested, treat as a no-op
+    # success rather than emitting an invalid empty SET clause.
+    case sets do
+      [] ->
+        :ok
+
+      _ ->
+        query =
+          "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}) SET " <>
+            Enum.join(sets, ", ")
+
+        exec_write(query)
+    end
+  end
+
+  # For the pending-review contest flow we need a CertificationRecord so
+  # TRACE's certification_history reflects the contest event alongside
+  # the UpdateRecord. The entity itself is separately marked contested by
+  # `mark_entity_contested/1`.
+  defp write_contest_certification_record(
+         %Cqr.Update{entity: {ns, name}} = expression,
+         agent_id,
+         previous_status,
+         timestamp
+       ) do
+    {:ok, record_id} = generate_version_record_id()
+    previous = status_to_string(previous_status)
+    evidence_text = expression.evidence || "Contested by UPDATE (#{expression.change_type})"
+
+    query =
+      "INSERT (:CertificationRecord {" <>
+        "record_id: '#{record_id}', " <>
+        "entity_namespace: '#{ns}', entity_name: '#{name}', " <>
+        "previous_status: '#{previous}', " <>
+        "new_status: 'contested', " <>
+        "agent_id: '#{escape(agent_id)}', " <>
+        "authority: '', " <>
+        "evidence: '#{escape(evidence_text)}', " <>
+        "timestamp: '#{timestamp}'" <>
+        "})"
+
+    with :ok <- exec_write(query) do
+      edge_query =
+        "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}), " <>
+          "(r:CertificationRecord {record_id: '#{record_id}'}) " <>
+          "INSERT (e)-[:CERTIFICATION_EVENT]->(r)"
+
+      exec_write(edge_query)
+    end
+  end
+
+  defp mark_entity_contested({ns, name}) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}) " <>
+        "SET e.certification_status = 'contested', e.certified = false"
+
+    exec_write(query)
+  end
+
+  defp status_to_string(nil), do: ""
+  defp status_to_string(status) when is_atom(status), do: to_string(status)
+  defp status_to_string(status) when is_binary(status), do: status
+
+  defp build_update_applied_result(
+         %Cqr.Update{entity: {ns, name}} = expression,
+         agent_id,
+         snapshot,
+         record_id,
+         now
+       ) do
+    %Cqr.Result{
+      data: [
+        %{
+          entity: Cqr.Types.format_entity({ns, name}),
+          status: "applied",
+          change_type: expression.change_type,
+          previous_description: snapshot.description,
+          new_description: expression.description || snapshot.description,
+          previous_type: snapshot.type,
+          new_type: expression.type || snapshot.type,
+          previous_status: snapshot.status,
+          evidence: expression.evidence,
+          updated_by: agent_id,
+          updated_at: now,
+          record_id: record_id
+        }
+      ],
+      sources: ["grafeo"],
+      quality: %Cqr.Quality{
+        freshness: now,
+        owner: agent_id,
+        provenance: "UPDATE operation (#{expression.change_type}) by #{agent_id}"
+      }
+    }
+  end
+
+  defp build_update_pending_result(
+         %Cqr.Update{entity: {ns, name}} = expression,
+         agent_id,
+         snapshot,
+         record_id,
+         now
+       ) do
+    %Cqr.Result{
+      data: [
+        %{
+          entity: Cqr.Types.format_entity({ns, name}),
+          status: "pending_review",
+          change_type: expression.change_type,
+          previous_description: snapshot.description,
+          proposed_description: expression.description || snapshot.description,
+          previous_type: snapshot.type,
+          proposed_type: expression.type || snapshot.type,
+          previous_status: snapshot.status,
+          new_status: :contested,
+          evidence: expression.evidence,
+          requested_by: agent_id,
+          requested_at: now,
+          record_id: record_id
+        }
+      ],
+      sources: ["grafeo"],
+      quality: %Cqr.Quality{
+        freshness: now,
+        owner: agent_id,
+        provenance:
+          "UPDATE operation (#{expression.change_type}) by #{agent_id} " <>
+            "pending governance review — entity contested"
       }
     }
   end

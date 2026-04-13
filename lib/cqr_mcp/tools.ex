@@ -2,9 +2,10 @@ defmodule CqrMcp.Tools do
   @moduledoc """
   MCP tool definitions for the CQR planner.
 
-  Provides the 12 tools surfaced to MCP clients: cqr_resolve, cqr_discover,
+  Provides the tools surfaced to MCP clients: cqr_resolve, cqr_discover,
   cqr_certify, cqr_assert, cqr_assert_batch, cqr_trace, cqr_signal,
-  cqr_refresh, cqr_awareness, cqr_hypothesize, cqr_compare, and cqr_anchor.
+  cqr_refresh, cqr_awareness, cqr_hypothesize, cqr_compare, cqr_anchor,
+  and cqr_update.
 
   Each tool definition includes name, description, and JSON Schema for inputs.
   Tool execution delegates to `Cqr.Engine.execute/2`.
@@ -24,7 +25,8 @@ defmodule CqrMcp.Tools do
       awareness_tool(),
       hypothesize_tool(),
       compare_tool(),
-      anchor_tool()
+      anchor_tool(),
+      update_tool()
     ]
   end
 
@@ -106,6 +108,13 @@ defmodule CqrMcp.Tools do
 
   def call("cqr_anchor", args, context) do
     case build_anchor_expression(args) do
+      {:ok, expression} -> execute_and_format(expression, context)
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  def call("cqr_update", args, context) do
+    case build_update_expression(args) do
       {:ok, expression} -> execute_and_format(expression, context)
       {:error, error} -> {:error, error}
     end
@@ -536,6 +545,59 @@ defmodule CqrMcp.Tools do
           }
         },
         "required" => ["entities"]
+      }
+    }
+  end
+
+  defp update_tool do
+    %{
+      "name" => "cqr_update",
+      "description" =>
+        "Evolve the content of an existing entity while preserving its prior " <>
+          "state as a VersionRecord. Governance decides whether the change " <>
+          "applies immediately, transitions the entity to contested for " <>
+          "pending review, or is blocked. Use CHANGE_TYPE correction or " <>
+          "refresh for factual/freshness fixes, scope_change to re-scope, " <>
+          "redefinition to change the entity's meaning, or reclassification " <>
+          "to change its type. On a certified entity, redefinition and " <>
+          "reclassification are deferred to governance (entity becomes " <>
+          "contested; a pending UpdateRecord is written).",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "entity" => %{
+            "type" => "string",
+            "description" => "Entity to update (entity:namespace:name)"
+          },
+          "change_type" => %{
+            "type" => "string",
+            "enum" => [
+              "correction",
+              "refresh",
+              "redefinition",
+              "scope_change",
+              "reclassification"
+            ],
+            "description" => "Semantic category of the change"
+          },
+          "description" => %{
+            "type" => "string",
+            "description" => "New description text (optional)"
+          },
+          "type" => %{
+            "type" => "string",
+            "description" => "New entity type identifier (optional)"
+          },
+          "evidence" => %{
+            "type" => "string",
+            "description" => "Rationale for the change (optional)"
+          },
+          "confidence" => %{
+            "type" => "number",
+            "description" => "New confidence score in [0.0, 1.0] (optional)"
+          }
+        },
+        "required" => ["entity", "change_type"]
       }
     }
   end
@@ -1100,6 +1162,40 @@ defmodule CqrMcp.Tools do
 
     Enum.join(parts, " ")
   end
+
+  defp build_update_expression(args) do
+    with {:ok, entity} <- require_string(args, "entity"),
+         {:ok, change_type} <- require_string(args, "change_type") do
+      clauses =
+        [
+          "UPDATE #{entity}",
+          "CHANGE_TYPE #{change_type}",
+          optional_string_clause("DESCRIPTION", args["description"], quoted: true),
+          optional_string_clause("TYPE", args["type"], quoted: false),
+          optional_string_clause("EVIDENCE", args["evidence"], quoted: true),
+          optional_confidence_clause(args["confidence"])
+        ]
+        |> Enum.reject(&is_nil/1)
+
+      {:ok, Enum.join(clauses, " ")}
+    end
+  end
+
+  defp optional_string_clause(_keyword, nil, _opts), do: nil
+  defp optional_string_clause(_keyword, "", _opts), do: nil
+
+  defp optional_string_clause(keyword, value, quoted: true) when is_binary(value),
+    do: ~s(#{keyword} "#{sanitize_quoted(value)}")
+
+  defp optional_string_clause(keyword, value, quoted: false) when is_binary(value),
+    do: "#{keyword} #{value}"
+
+  defp optional_string_clause(_keyword, _value, _opts), do: nil
+
+  defp optional_confidence_clause(score) when is_number(score),
+    do: "CONFIDENCE #{:erlang.float_to_binary(score * 1.0, decimals: 2)}"
+
+  defp optional_confidence_clause(_), do: nil
 
   # Quote a free-form value as a CQR string literal. Strips any surrounding
   # quotes the client may have added (idempotent under double-quoting), and
