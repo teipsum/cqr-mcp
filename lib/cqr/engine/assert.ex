@@ -14,9 +14,10 @@ defmodule Cqr.Engine.Assert do
   of protocol-level validation — the same pattern that RESOLVE and DISCOVER
   follow.
 
-  Relationships (the optional MCP-layer `relationships` parameter) are not
-  part of the CQR expression syntax and therefore not part of the AST. They
-  are forwarded from the engine context through the adapter's opts.
+  Relationships may come from either the CQR expression's `RELATIONSHIPS`
+  clause (populated on the AST by the parser) or from the engine context
+  (`context[:relationships]`) for callers like the MCP tool layer that
+  parse relationships independently. The AST value wins when present.
   """
 
   alias Cqr.Adapter.Grafeo, as: GrafeoAdapter
@@ -31,13 +32,14 @@ defmodule Cqr.Engine.Assert do
   def execute(%Cqr.Assert{} = ast, context) do
     agent_scope = Map.get(context, :scope) || raise "Agent scope is required"
     agent_id = Map.get(context, :agent_id, "anonymous")
-    relationships = Map.get(context, :relationships, [])
+    relationships = ast.relationships || Map.get(context, :relationships, [])
 
     visible = Cqr.Scope.visible_scopes(agent_scope)
     scope_context = %{visible_scopes: visible}
 
     with :ok <- validate_required_fields(ast),
-         :ok <- validate_confidence(ast.confidence) do
+         :ok <- validate_confidence(ast.confidence),
+         :ok <- validate_relationships(relationships) do
       GrafeoAdapter.assert(ast, scope_context,
         agent_id: agent_id,
         relationships: relationships
@@ -97,4 +99,26 @@ defmodule Cqr.Engine.Assert do
        retry_guidance: "Use a decimal value like 0.5, 0.65, 0.9"
      }}
   end
+
+  defp validate_relationships([]), do: :ok
+
+  defp validate_relationships(rels) when is_list(rels) do
+    case Enum.find(rels, &invalid_strength?/1) do
+      nil ->
+        :ok
+
+      %{type: type, strength: strength} ->
+        {:error,
+         %Cqr.Error{
+           code: :validation_error,
+           message:
+             "RELATIONSHIPS strength must be between 0.0 and 1.0 " <>
+               "(got #{inspect(strength)} for #{type})",
+           retry_guidance: "Use a decimal value like 0.5, 0.75, 0.9"
+         }}
+    end
+  end
+
+  defp invalid_strength?(%{strength: s}) when is_float(s) and s >= 0.0 and s <= 1.0, do: false
+  defp invalid_strength?(_), do: true
 end
