@@ -16,7 +16,8 @@ defmodule CqrMcp.Tools do
       assert_batch_tool(),
       trace_tool(),
       signal_tool(),
-      refresh_tool()
+      refresh_tool(),
+      compare_tool()
     ]
   end
 
@@ -75,6 +76,13 @@ defmodule CqrMcp.Tools do
   def call("cqr_refresh", args, context) do
     expression = build_refresh_expression(args)
     execute_and_format(expression, context)
+  end
+
+  def call("cqr_compare", args, context) do
+    case build_compare_expression(args) do
+      {:ok, expression} -> execute_and_format(expression, context)
+      {:error, error} -> {:error, error}
+    end
   end
 
   def call(name, _args, _context) do
@@ -348,6 +356,36 @@ defmodule CqrMcp.Tools do
           }
         },
         "required" => []
+      }
+    }
+  end
+
+  defp compare_tool do
+    %{
+      "name" => "cqr_compare",
+      "description" =>
+        "Compare two or more entities side-by-side. Returns shared relationships, " <>
+          "differing properties (type, description, owner), and quality metadata " <>
+          "differences (reputation, certification status, freshness). Use this when " <>
+          "an agent needs to choose between alternatives or audit divergence between " <>
+          "candidate definitions in the same domain.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "entities" => %{
+            "type" => "string",
+            "description" =>
+              "Comma-separated entity references to compare " <>
+                "(entity:ns:a,entity:ns:b[,entity:ns:c,...]). At least two required."
+          },
+          "include" => %{
+            "type" => "string",
+            "description" =>
+              "Optional comma-separated facets to include: relationships, properties, " <>
+                "quality. Defaults to all three."
+          }
+        },
+        "required" => ["entities"]
       }
     }
   end
@@ -708,6 +746,74 @@ defmodule CqrMcp.Tools do
     parts = parts ++ ["WHERE age > #{threshold}", "RETURN stale_items"]
 
     Enum.join(parts, " ")
+  end
+
+  defp build_compare_expression(args) do
+    with {:ok, entities_raw} <- require_string(args, "entities"),
+         {:ok, entity_refs} <- parse_entity_list(entities_raw),
+         {:ok, include_clause} <- parse_include(args["include"]) do
+      parts = ["COMPARE #{Enum.join(entity_refs, ", ")}"]
+      parts = if include_clause, do: parts ++ [include_clause], else: parts
+      {:ok, Enum.join(parts, " ")}
+    end
+  end
+
+  defp parse_entity_list(raw) do
+    refs =
+      raw
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    cond do
+      length(refs) < 2 ->
+        {:error, %{"code" => -32_602, "message" => "entities must list at least two references"}}
+
+      Enum.all?(refs, &String.starts_with?(&1, "entity:")) ->
+        {:ok, refs}
+
+      true ->
+        bad = Enum.reject(refs, &String.starts_with?(&1, "entity:"))
+
+        {:error,
+         %{
+           "code" => -32_602,
+           "message" =>
+             "entities entries must be in entity:namespace:name form. Invalid: " <>
+               Enum.join(bad, ", ")
+         }}
+    end
+  end
+
+  @valid_compare_facets ~w(relationships properties quality)
+
+  defp parse_include(nil), do: {:ok, nil}
+  defp parse_include(""), do: {:ok, nil}
+
+  defp parse_include(raw) when is_binary(raw) do
+    facets =
+      raw
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    case Enum.reject(facets, &(&1 in @valid_compare_facets)) do
+      [] when facets != [] ->
+        {:ok, "INCLUDE " <> Enum.join(facets, ", ")}
+
+      [] ->
+        {:ok, nil}
+
+      bad ->
+        {:error,
+         %{
+           "code" => -32_602,
+           "message" =>
+             "include must list facets from " <>
+               Enum.join(@valid_compare_facets, ", ") <>
+               ". Invalid: " <> Enum.join(bad, ", ")
+         }}
+    end
   end
 
   defp build_certify_expression(args) do
