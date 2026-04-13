@@ -24,7 +24,8 @@ defmodule Cqr.Engine do
     Planner,
     Refresh,
     Signal,
-    Trace
+    Trace,
+    Update
   }
 
   @doc """
@@ -190,6 +191,10 @@ defmodule Cqr.Engine do
 
   defp dispatch(%Cqr.Anchor{} = ast, _scope_context, context) do
     Anchor.execute(ast, context)
+  end
+
+  defp dispatch(%Cqr.Update{} = ast, _scope_context, context) do
+    Update.execute(ast, context)
   end
 
   defp dispatch(ast, scope_context, context) do

@@ -29,7 +29,8 @@ defmodule Cqr.Parser do
     Refresh,
     Resolve,
     Signal,
-    Trace
+    Trace,
+    Update
   }
 
   defparsec(
@@ -45,7 +46,8 @@ defmodule Cqr.Parser do
       Awareness.awareness(),
       Hypothesize.hypothesize(),
       Compare.compare(),
-      Anchor.anchor()
+      Anchor.anchor(),
+      Update.update()
     ])
     |> eos()
   )
@@ -115,7 +117,8 @@ defmodule Cqr.Parser do
     {"HYPOTHESIZ", "HYPOTHESIZE"},
     {"HYPOTH", "HYPOTHESIZE"},
     {"COMPAR", "COMPARE"},
-    {"ANCHO", "ANCHOR"}
+    {"ANCHO", "ANCHOR"},
+    {"UPDAT", "UPDATE"}
   ]
 
   defp suggest_fix(rest, _input) do
@@ -132,6 +135,6 @@ defmodule Cqr.Parser do
   end
 
   defp unknown_start_message(rest) do
-    "Expression must start with RESOLVE, DISCOVER, CERTIFY, ASSERT, TRACE, SIGNAL, REFRESH, AWARENESS, HYPOTHESIZE, COMPARE, or ANCHOR. Unexpected: \"#{String.slice(rest, 0, 20)}\""
+    "Expression must start with RESOLVE, DISCOVER, CERTIFY, ASSERT, TRACE, SIGNAL, REFRESH, AWARENESS, HYPOTHESIZE, COMPARE, ANCHOR, or UPDATE. Unexpected: \"#{String.slice(rest, 0, 20)}\""
   end
 end
