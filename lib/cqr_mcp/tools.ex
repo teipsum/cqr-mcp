@@ -16,7 +16,8 @@ defmodule CqrMcp.Tools do
       assert_batch_tool(),
       trace_tool(),
       signal_tool(),
-      refresh_tool()
+      refresh_tool(),
+      awareness_tool()
     ]
   end
 
@@ -74,6 +75,11 @@ defmodule CqrMcp.Tools do
 
   def call("cqr_refresh", args, context) do
     expression = build_refresh_expression(args)
+    execute_and_format(expression, context)
+  end
+
+  def call("cqr_awareness", args, context) do
+    expression = build_awareness_expression(args)
     execute_and_format(expression, context)
   end
 
@@ -345,6 +351,43 @@ defmodule CqrMcp.Tools do
             "type" => "string",
             "description" =>
               "Scope to check (e.g., scope:company:product). Default: agent's full scope."
+          }
+        },
+        "required" => []
+      }
+    }
+  end
+
+  defp awareness_tool do
+    %{
+      "name" => "cqr_awareness",
+      "description" =>
+        "Perceive ambient agent activity in the visible scopes. Returns one row per " <>
+          "agent that has recently asserted, certified, or signaled in the scopes the " <>
+          "calling agent can see, with the entities they touched and the intents they " <>
+          "declared. Use this before starting work to coordinate without explicit " <>
+          "messaging: avoid duplicating an in-flight investigation, see who owns " <>
+          "nearby entities, surface fresh intents for the area. Ranked by recent " <>
+          "activity volume.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "scope" => %{
+            "type" => "string",
+            "description" =>
+              "Scope to scan (e.g., scope:company:product). Default: agent's full " <>
+                "visible scope set."
+          },
+          "time_window" => %{
+            "type" => "string",
+            "description" =>
+              "Recency window for audit events (e.g., '24h', '7d', '30m'). " <>
+                "Default: full history."
+          },
+          "limit" => %{
+            "type" => "integer",
+            "description" => "Maximum number of agents to return. Default 20.",
+            "default" => 20
           }
         },
         "required" => []
@@ -706,6 +749,30 @@ defmodule CqrMcp.Tools do
       end
 
     parts = parts ++ ["WHERE age > #{threshold}", "RETURN stale_items"]
+
+    Enum.join(parts, " ")
+  end
+
+  defp build_awareness_expression(args) do
+    parts = ["AWARENESS active_agents"]
+
+    parts =
+      case args["scope"] do
+        scope when is_binary(scope) and scope != "" -> parts ++ ["WITHIN #{scope}"]
+        _ -> parts
+      end
+
+    parts =
+      case args["time_window"] do
+        window when is_binary(window) and window != "" -> parts ++ ["OVER last #{window}"]
+        _ -> parts
+      end
+
+    parts =
+      case args["limit"] do
+        n when is_integer(n) and n > 0 -> parts ++ ["LIMIT #{n}"]
+        _ -> parts
+      end
 
     Enum.join(parts, " ")
   end
