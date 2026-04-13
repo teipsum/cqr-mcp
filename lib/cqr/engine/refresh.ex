@@ -8,7 +8,7 @@ defmodule Cqr.Engine.Refresh do
   before any data is materialised.
   """
 
-  alias Cqr.Adapter.Grafeo, as: GrafeoAdapter
+  alias Cqr.Engine.Planner
 
   @doc """
   Execute a REFRESH CHECK operation.
@@ -21,6 +21,8 @@ defmodule Cqr.Engine.Refresh do
     visible = Map.get(context, :visible_scopes, [])
     scope_context = %{visible_scopes: visible}
 
-    GrafeoAdapter.refresh_check(ast, scope_context, [])
+    with {:ok, adapter} <- Planner.resolve_adapter(context, :refresh) do
+      adapter.refresh_check(ast, scope_context, [])
+    end
   end
 end

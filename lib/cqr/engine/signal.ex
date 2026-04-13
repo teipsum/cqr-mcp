@@ -7,7 +7,7 @@ defmodule Cqr.Engine.Signal do
   `signal/3` to update the reputation and write a SignalRecord audit node.
   """
 
-  alias Cqr.Adapter.Grafeo, as: GrafeoAdapter
+  alias Cqr.Engine.Planner
   alias Cqr.Repo.Semantic
 
   @doc """
@@ -22,12 +22,13 @@ defmodule Cqr.Engine.Signal do
     visible = resolve_visible_scopes(context)
     scope_context = %{visible_scopes: visible}
 
-    with :ok <- validate_required_fields(ast),
+    with {:ok, adapter} <- Planner.resolve_adapter(context, :signal),
+         :ok <- validate_required_fields(ast),
          :ok <- validate_score(ast.score),
          {:ok, entity_data} <- fetch_visible_entity(ast.entity, visible) do
       effective_agent = ast.agent || agent_id
 
-      GrafeoAdapter.signal(ast, scope_context,
+      adapter.signal(ast, scope_context,
         agent_id: effective_agent,
         previous_reputation: entity_data[:reputation]
       )
