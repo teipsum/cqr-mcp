@@ -50,7 +50,7 @@ The configuration above runs in-memory — the sample dataset is seeded on every
 }
 ```
 
-Persistent mode opens (or creates) `~/.cqr/grafeo.db` and does **not** seed the sample dataset. Supply a path after `--persist` to choose a custom location, or append `--reset` to wipe the database and re-seed the sample data as a factory reset.
+Persistent mode opens (or creates) `~/.cqr/grafeo.grafeo` and does **not** seed the sample dataset. Supply a path after `--persist` to choose a custom location, or append `--reset` to wipe the database and re-seed the sample data as a factory reset.
 
 ### Verification
 

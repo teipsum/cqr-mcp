@@ -78,7 +78,7 @@ Everything else — query planning, adapter dispatch, scope resolution, quality 
 
 All query traffic is routed through `Cqr.Grafeo.Server`, a GenServer that owns the NIF handle and serializes access. Concurrent MCP requests produce a queue of `GenServer.call` messages rather than concurrent NIF invocations. Grafeo supports concurrent reads internally, but serializing at the BEAM boundary gives us one choke point for instrumentation, backpressure, and future pooling.
 
-Grafeo runs in-memory by default. Pass `--persist` at startup for durable storage across restarts — the server opens or creates `~/.cqr/grafeo.db` (or a custom path supplied after the flag) and skips the sample-data seeder. See `README.md` for the full flag reference.
+Grafeo runs in-memory by default. Pass `--persist` at startup for durable storage across restarts — the server opens or creates `~/.cqr/grafeo.grafeo` (or a custom path supplied after the flag) and skips the sample-data seeder. See `README.md` for the full flag reference.
 
 ## 3. Multi-Paradigm Query Composition
 

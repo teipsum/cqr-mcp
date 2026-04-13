@@ -37,7 +37,8 @@ fn new(path: Term) -> NifResult<(Atom, ResourceArc<GrafeoResource>)> {
         GrafeoDB::new_in_memory()
     } else {
         let path_str: String = path.decode()?;
-        let config = grafeo::Config::persistent(&path_str);
+        let config = grafeo::Config::persistent(&path_str)
+            .with_storage_format(grafeo_engine::config::StorageFormat::SingleFile);
         match GrafeoDB::with_config(config) {
             Ok(db) => db,
             Err(e) => {

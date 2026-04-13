@@ -114,6 +114,7 @@ version = "0.1.0"
 dependencies = [
  "grafeo",
  "grafeo-common",
+ "grafeo-engine",
  "rustler",
 ]
 
@@ -324,6 +325,7 @@ dependencies = [
  "serde",
  "smallvec",
  "thiserror",
+ "tokio",
  "unicode-normalization",
 ]
 
