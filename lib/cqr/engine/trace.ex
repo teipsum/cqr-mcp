@@ -25,13 +25,19 @@ defmodule Cqr.Engine.Trace do
   when the entity is not visible or an adapter write fails.
   """
   def execute(%Cqr.Trace{} = ast, context) do
-    agent_scope = Map.get(context, :scope) || raise "Agent scope is required"
-    visible = Cqr.Scope.visible_scopes(agent_scope)
+    visible = resolve_visible_scopes(context)
     scope_context = %{visible_scopes: visible}
 
     with {:ok, _entity_data} <- fetch_visible_entity(ast.entity, visible) do
       GrafeoAdapter.trace(ast, scope_context, [])
     end
+  end
+
+  defp resolve_visible_scopes(context) do
+    Map.get_lazy(context, :visible_scopes, fn ->
+      agent_scope = Map.get(context, :scope) || raise "Agent scope is required"
+      Cqr.Scope.visible_scopes(agent_scope)
+    end)
   end
 
   defp fetch_visible_entity(entity, visible) do

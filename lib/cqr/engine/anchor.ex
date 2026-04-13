@@ -50,10 +50,16 @@ defmodule Cqr.Engine.Anchor do
   end
 
   def execute(%Cqr.Anchor{} = ast, context) do
-    agent_scope = Map.get(context, :scope) || raise "Agent scope is required"
-    visible = Cqr.Scope.visible_scopes(agent_scope)
+    visible = resolve_visible_scopes(context)
     scope_context = %{visible_scopes: visible}
 
     GrafeoAdapter.anchor(ast, scope_context, [])
+  end
+
+  defp resolve_visible_scopes(context) do
+    Map.get_lazy(context, :visible_scopes, fn ->
+      agent_scope = Map.get(context, :scope) || raise "Agent scope is required"
+      Cqr.Scope.visible_scopes(agent_scope)
+    end)
   end
 end
