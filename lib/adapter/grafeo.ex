@@ -15,7 +15,8 @@ defmodule Cqr.Adapter.Grafeo do
   alias Cqr.Repo.Semantic
 
   @impl true
-  def capabilities, do: [:resolve, :discover, :assert, :trace, :signal, :refresh]
+  def capabilities,
+    do: [:resolve, :discover, :assert, :trace, :signal, :refresh, :awareness]
 
   @impl true
   def resolve(%Cqr.Resolve{entity: entity} = expression, scope_context, _opts) do
@@ -1179,4 +1180,256 @@ defmodule Cqr.Adapter.Grafeo do
   defp threshold_to_hours({amount, :h}), do: amount
   defp threshold_to_hours({amount, :d}), do: amount * 24
   defp threshold_to_hours({amount, :w}), do: amount * 24 * 7
+
+  # --- AWARENESS ---
+  #
+  # AWARENESS reads three audit-record kinds for entities that sit in
+  # the agent's visible scopes: AssertionRecord, CertificationRecord,
+  # SignalRecord. It groups by `agent_id`, sorts by recent activity
+  # volume, and returns one row per agent with the entities they touched
+  # and the intents they declared.
+  #
+  # The scope filter runs inside the MATCH so no audit row about an
+  # entity outside the visible set is ever materialised. The optional
+  # `time_window` is applied in Elixir after fetch — Grafeo's Cypher
+  # has no parameterised timestamp comparison, and the audit row count
+  # per scope subtree is small enough that post-filtering is fine for
+  # V1 agent budgets.
+
+  @impl true
+  def awareness(%Cqr.Awareness{} = expression, scope_context, _opts) do
+    visible = scope_context[:visible_scopes] || []
+
+    case fetch_audit_rows(visible) do
+      {:ok, rows} ->
+        cutoff = window_cutoff(expression.time_window)
+
+        agents =
+          rows
+          |> Enum.filter(&within_window?(&1, cutoff))
+          |> group_by_agent()
+          |> Enum.map(&summarise_agent/1)
+          |> Enum.sort_by(fn a -> {-a.activity_count, a.last_seen} end)
+          |> apply_limit(expression.limit)
+
+        {:ok,
+         %Cqr.Result{
+           data: agents,
+           sources: ["grafeo"],
+           quality: %Cqr.Quality{
+             freshness: DateTime.utc_now(),
+             provenance: awareness_provenance(expression, visible)
+           }
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %Cqr.Error{
+           code: :adapter_error,
+           message: "Grafeo AWARENESS failed: #{inspect(reason)}"
+         }}
+    end
+  end
+
+  defp fetch_audit_rows([]), do: {:ok, []}
+
+  defp fetch_audit_rows(visible_scopes) do
+    with {:ok, assertions} <- fetch_assertion_audit(visible_scopes),
+         {:ok, certifications} <- fetch_certification_audit(visible_scopes),
+         {:ok, signals} <- fetch_signal_audit(visible_scopes) do
+      {:ok, assertions ++ certifications ++ signals}
+    end
+  end
+
+  defp fetch_assertion_audit(visible_scopes) do
+    scope_list = scope_in_clause(visible_scopes)
+
+    query =
+      "MATCH (e:Entity)-[:IN_SCOPE]->(s:Scope), " <>
+        "(e)-[:ASSERTED_BY]->(ar:AssertionRecord) " <>
+        "WHERE s.path IN [#{scope_list}] " <>
+        "RETURN DISTINCT ar.agent_id, ar.timestamp, ar.intent, " <>
+        "e.namespace, e.name"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        {:ok,
+         Enum.map(rows, fn row ->
+           %{
+             kind: :assertion,
+             agent_id: row["ar.agent_id"],
+             timestamp: row["ar.timestamp"],
+             intent: nilify_empty(row["ar.intent"]),
+             entity: Cqr.Types.format_entity({row["e.namespace"], row["e.name"]})
+           }
+         end)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_certification_audit(visible_scopes) do
+    scope_list = scope_in_clause(visible_scopes)
+
+    query =
+      "MATCH (e:Entity)-[:IN_SCOPE]->(s:Scope), " <>
+        "(e)-[:CERTIFICATION_EVENT]->(cr:CertificationRecord) " <>
+        "WHERE s.path IN [#{scope_list}] " <>
+        "RETURN DISTINCT cr.agent_id, cr.timestamp, cr.new_status, " <>
+        "cr.previous_status, cr.authority, e.namespace, e.name"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        {:ok,
+         Enum.map(rows, fn row ->
+           %{
+             kind: :certification,
+             agent_id: row["cr.agent_id"],
+             timestamp: row["cr.timestamp"],
+             from_status: nilify_empty(row["cr.previous_status"]),
+             to_status: row["cr.new_status"],
+             authority: nilify_empty(row["cr.authority"]),
+             entity: Cqr.Types.format_entity({row["e.namespace"], row["e.name"]})
+           }
+         end)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_signal_audit(visible_scopes) do
+    scope_list = scope_in_clause(visible_scopes)
+
+    query =
+      "MATCH (e:Entity)-[:IN_SCOPE]->(s:Scope), " <>
+        "(e)-[:SIGNAL_EVENT]->(sr:SignalRecord) " <>
+        "WHERE s.path IN [#{scope_list}] " <>
+        "RETURN DISTINCT sr.agent_id, sr.timestamp, sr.previous_reputation, " <>
+        "sr.new_reputation, sr.evidence, e.namespace, e.name"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        {:ok,
+         Enum.map(rows, fn row ->
+           %{
+             kind: :signal,
+             agent_id: row["sr.agent_id"],
+             timestamp: row["sr.timestamp"],
+             previous_reputation: row["sr.previous_reputation"],
+             new_reputation: row["sr.new_reputation"],
+             evidence: nilify_empty(row["sr.evidence"]),
+             entity: Cqr.Types.format_entity({row["e.namespace"], row["e.name"]})
+           }
+         end)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp scope_in_clause(visible_scopes) do
+    Enum.map_join(visible_scopes, ", ", fn segments -> "\"#{Enum.join(segments, ":")}\"" end)
+  end
+
+  defp window_cutoff(nil), do: nil
+
+  defp window_cutoff({amount, unit}) do
+    DateTime.add(DateTime.utc_now(), -duration_to_seconds(amount, unit), :second)
+  end
+
+  defp within_window?(_row, nil), do: true
+
+  defp within_window?(row, %DateTime{} = cutoff) do
+    case parse_timestamp(row.timestamp) do
+      nil -> false
+      dt -> DateTime.compare(dt, cutoff) != :lt
+    end
+  end
+
+  defp group_by_agent(rows) do
+    rows
+    |> Enum.reject(fn row -> is_nil(row.agent_id) or row.agent_id == "" end)
+    |> Enum.group_by(& &1.agent_id)
+  end
+
+  defp summarise_agent({agent_id, rows}) do
+    {assertions, certifications, signals} = split_by_kind(rows)
+
+    entities =
+      rows
+      |> Enum.map(& &1.entity)
+      |> Enum.uniq()
+
+    intents =
+      assertions
+      |> Enum.map(& &1.intent)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    last_seen =
+      rows
+      |> Enum.map(& &1.timestamp)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.max(fn -> nil end)
+
+    %{
+      agent_id: agent_id,
+      activity_count: length(rows),
+      last_seen: last_seen,
+      assertions: Enum.map(assertions, &assertion_summary/1),
+      certifications: Enum.map(certifications, &certification_summary/1),
+      signals: Enum.map(signals, &signal_summary/1),
+      entities_touched: entities,
+      intents: intents
+    }
+  end
+
+  defp split_by_kind(rows) do
+    Enum.reduce(rows, {[], [], []}, fn
+      %{kind: :assertion} = r, {a, c, s} -> {[r | a], c, s}
+      %{kind: :certification} = r, {a, c, s} -> {a, [r | c], s}
+      %{kind: :signal} = r, {a, c, s} -> {a, c, [r | s]}
+    end)
+  end
+
+  defp assertion_summary(row) do
+    %{entity: row.entity, intent: row.intent, at: row.timestamp}
+  end
+
+  defp certification_summary(row) do
+    %{
+      entity: row.entity,
+      from_status: row.from_status,
+      to_status: row.to_status,
+      authority: row.authority,
+      at: row.timestamp
+    }
+  end
+
+  defp signal_summary(row) do
+    %{
+      entity: row.entity,
+      previous_reputation: row.previous_reputation,
+      new_reputation: row.new_reputation,
+      evidence: row.evidence,
+      at: row.timestamp
+    }
+  end
+
+  defp apply_limit(agents, nil), do: agents
+
+  defp apply_limit(agents, n) when is_integer(n) and n > 0,
+    do: Enum.take(agents, n)
+
+  defp apply_limit(agents, _), do: agents
+
+  defp awareness_provenance(%Cqr.Awareness{time_window: nil}, visible) do
+    "AWARENESS scan over #{length(visible)} visible scope(s), full history"
+  end
+
+  defp awareness_provenance(%Cqr.Awareness{time_window: {amount, unit}}, visible) do
+    "AWARENESS scan over #{length(visible)} visible scope(s), last #{amount}#{unit}"
+  end
 end
