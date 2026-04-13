@@ -15,7 +15,7 @@ defmodule Cqr.Adapter.Grafeo do
   alias Cqr.Repo.Semantic
 
   @impl true
-  def capabilities, do: [:resolve, :discover, :assert, :trace, :signal, :refresh]
+  def capabilities, do: [:resolve, :discover, :assert, :trace, :signal, :refresh, :anchor]
 
   @impl true
   def resolve(%Cqr.Resolve{entity: entity} = expression, scope_context, _opts) do
@@ -1179,4 +1179,196 @@ defmodule Cqr.Adapter.Grafeo do
   defp threshold_to_hours({amount, :h}), do: amount
   defp threshold_to_hours({amount, :d}), do: amount * 24
   defp threshold_to_hours({amount, :w}), do: amount * 24 * 7
+
+  # --- ANCHOR ---
+
+  @impl true
+  def anchor(%Cqr.Anchor{} = expression, scope_context, _opts) do
+    visible = scope_context[:visible_scopes] || []
+    threshold_hours = expression.freshness && threshold_to_hours(expression.freshness)
+
+    entity_records =
+      Enum.map(expression.entities, fn entity ->
+        resolve_anchor_entity(entity, visible)
+      end)
+
+    assessment = build_anchor_assessment(entity_records, expression, threshold_hours)
+    {:ok, build_anchor_result(assessment, expression)}
+  end
+
+  defp resolve_anchor_entity(entity, visible) do
+    case Semantic.get_entity(entity, visible) do
+      {:ok, data} -> {:resolved, entity, data}
+      {:error, :not_found} -> {:missing, entity, :not_found}
+      {:error, :not_visible} -> {:missing, entity, :not_visible}
+      {:error, reason} -> {:missing, entity, {:adapter_error, reason}}
+    end
+  end
+
+  defp build_anchor_assessment(records, expression, threshold_hours) do
+    resolved = for {:resolved, ent, data} <- records, do: {ent, data}
+    missing = for {:missing, ent, reason} <- records, do: {ent, reason}
+
+    reputations =
+      resolved
+      |> Enum.map(fn {_ent, data} -> numeric(data[:reputation]) end)
+      |> Enum.reject(&is_nil/1)
+
+    missing_refs = Enum.map(missing, fn {ent, _} -> Cqr.Types.format_entity(ent) end)
+
+    uncertified =
+      resolved
+      |> Enum.filter(fn {_ent, data} -> data[:certified] != true end)
+      |> Enum.map(fn {ent, _data} -> Cqr.Types.format_entity(ent) end)
+
+    stale =
+      if threshold_hours do
+        resolved
+        |> Enum.filter(fn {_ent, data} ->
+          age = numeric(data[:freshness_hours_ago])
+          is_number(age) and age > threshold_hours
+        end)
+        |> Enum.map(fn {ent, data} ->
+          %{
+            entity: Cqr.Types.format_entity(ent),
+            freshness_hours_ago: numeric(data[:freshness_hours_ago]),
+            threshold_hours: threshold_hours
+          }
+        end)
+      else
+        []
+      end
+
+    below_reputation =
+      case expression.reputation do
+        nil ->
+          []
+
+        threshold ->
+          resolved
+          |> Enum.filter(fn {_ent, data} ->
+            rep = numeric(data[:reputation])
+            is_number(rep) and rep < threshold
+          end)
+          |> Enum.map(fn {ent, data} ->
+            %{
+              entity: Cqr.Types.format_entity(ent),
+              reputation: numeric(data[:reputation]),
+              threshold: threshold
+            }
+          end)
+      end
+
+    {weakest, average} =
+      case {reputations, missing} do
+        {[], _} -> {0.0, 0.0}
+        {reps, []} -> {Enum.min(reps), mean(reps)}
+        {reps, _} -> {0.0, mean(reps)}
+      end
+
+    uncertified_count = length(uncertified)
+    missing_count = length(missing)
+
+    chain_confidence =
+      weakest
+      |> apply_penalty(uncertified_count, 0.8)
+      |> apply_penalty(missing_count, 0.5)
+
+    entities_summary =
+      Enum.map(records, &summarize_record(&1, threshold_hours, expression.reputation))
+
+    %{
+      chain: Enum.map(expression.entities, &Cqr.Types.format_entity/1),
+      rationale: expression.rationale,
+      weakest_link_confidence: weakest,
+      average_reputation: average,
+      chain_confidence: chain_confidence,
+      missing: missing_refs,
+      uncertified: uncertified,
+      stale: stale,
+      below_reputation: below_reputation,
+      entities: entities_summary,
+      recommendations: build_recommendations(missing_refs, uncertified, stale, below_reputation)
+    }
+  end
+
+  defp summarize_record({:resolved, entity, data}, threshold_hours, rep_threshold) do
+    age = numeric(data[:freshness_hours_ago])
+    rep = numeric(data[:reputation])
+
+    %{
+      entity: Cqr.Types.format_entity(entity),
+      status: "resolved",
+      reputation: rep,
+      certified: data[:certified] == true,
+      certified_by: data[:certified_by],
+      owner: data[:owner],
+      freshness_hours_ago: age,
+      stale: is_number(age) and is_number(threshold_hours) and age > threshold_hours,
+      below_reputation: is_number(rep) and is_number(rep_threshold) and rep < rep_threshold
+    }
+  end
+
+  defp summarize_record({:missing, entity, reason}, _threshold_hours, _rep_threshold) do
+    %{
+      entity: Cqr.Types.format_entity(entity),
+      status: "missing",
+      reason: missing_reason(reason)
+    }
+  end
+
+  defp missing_reason(:not_found), do: "not_found"
+  defp missing_reason(:not_visible), do: "not_visible"
+  defp missing_reason({:adapter_error, reason}), do: "adapter_error: #{inspect(reason)}"
+
+  defp build_recommendations(missing, uncertified, stale, below_reputation) do
+    []
+    |> maybe_add(missing, fn refs ->
+      "Resolve or remove missing entities before relying on this chain: " <>
+        Enum.join(refs, ", ")
+    end)
+    |> maybe_add(uncertified, fn refs ->
+      "Certify uncertified links to raise chain confidence: " <> Enum.join(refs, ", ")
+    end)
+    |> maybe_add(stale, fn entries ->
+      "Refresh stale links: " <>
+        Enum.map_join(entries, ", ", fn s -> s.entity end)
+    end)
+    |> maybe_add(below_reputation, fn entries ->
+      "Raise reputation (SIGNAL) on weak links: " <>
+        Enum.map_join(entries, ", ", fn s -> s.entity end)
+    end)
+    |> Enum.reverse()
+  end
+
+  defp maybe_add(acc, [], _fun), do: acc
+  defp maybe_add(acc, items, fun), do: [fun.(items) | acc]
+
+  defp apply_penalty(value, 0, _factor), do: value
+
+  defp apply_penalty(value, count, factor) when count > 0 do
+    value * :math.pow(factor, count)
+  end
+
+  defp numeric(v) when is_number(v), do: v * 1.0
+  defp numeric(_), do: nil
+
+  defp mean([]), do: 0.0
+  defp mean(list), do: Enum.sum(list) / length(list)
+
+  defp build_anchor_result(assessment, expression) do
+    provenance =
+      "ANCHOR over #{length(expression.entities)} entities" <>
+        if expression.rationale, do: " for \"#{expression.rationale}\"", else: ""
+
+    %Cqr.Result{
+      data: [assessment],
+      sources: ["grafeo"],
+      quality: %Cqr.Quality{
+        reputation: assessment.weakest_link_confidence,
+        confidence: assessment.chain_confidence,
+        provenance: provenance
+      }
+    }
+  end
 end
