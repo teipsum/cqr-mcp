@@ -18,9 +18,8 @@ defmodule Cqr.Engine.Signal do
   score, or an invisible / non-existent target entity.
   """
   def execute(%Cqr.Signal{} = ast, context) do
-    agent_scope = Map.get(context, :scope) || raise "Agent scope is required"
     agent_id = Map.get(context, :agent_id, "anonymous")
-    visible = Cqr.Scope.visible_scopes(agent_scope)
+    visible = resolve_visible_scopes(context)
     scope_context = %{visible_scopes: visible}
 
     with :ok <- validate_required_fields(ast),
@@ -33,6 +32,13 @@ defmodule Cqr.Engine.Signal do
         previous_reputation: entity_data[:reputation]
       )
     end
+  end
+
+  defp resolve_visible_scopes(context) do
+    Map.get_lazy(context, :visible_scopes, fn ->
+      agent_scope = Map.get(context, :scope) || raise "Agent scope is required"
+      Cqr.Scope.visible_scopes(agent_scope)
+    end)
   end
 
   # --- Validation ---

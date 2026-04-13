@@ -29,8 +29,7 @@ defmodule Cqr.Engine.Compare do
   to the agent.
   """
   def execute(%Cqr.Compare{} = ast, context) do
-    agent_scope = Map.get(context, :scope) || raise "Agent scope is required"
-    visible = Cqr.Scope.visible_scopes(agent_scope)
+    visible = resolve_visible_scopes(context)
     scope_context = %{visible_scopes: visible}
 
     with :ok <- validate_entity_count(ast.entities),
@@ -38,6 +37,13 @@ defmodule Cqr.Engine.Compare do
          :ok <- ensure_all_visible(ast.entities, visible) do
       GrafeoAdapter.compare(ast, scope_context, [])
     end
+  end
+
+  defp resolve_visible_scopes(context) do
+    Map.get_lazy(context, :visible_scopes, fn ->
+      agent_scope = Map.get(context, :scope) || raise "Agent scope is required"
+      Cqr.Scope.visible_scopes(agent_scope)
+    end)
   end
 
   # --- Validation ---
