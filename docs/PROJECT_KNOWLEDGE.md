@@ -36,16 +36,19 @@ The canonical specification with full grammar, semantics, and examples for all e
 
 1. Embeds Grafeo (pure-Rust graph database) via Rustler NIF — no external database required
 2. Implements the CQR parser, context assembly engine, and scope resolution
-3. Exposes CQR primitives as MCP tools (`cqr_resolve`, `cqr_discover`, `cqr_certify`)
+3. Exposes CQR primitives as MCP tools — currently seven: `cqr_resolve`, `cqr_discover`, `cqr_assert`, `cqr_certify`, `cqr_trace`, `cqr_signal`, `cqr_refresh`
 4. Exposes organizational context as MCP resources (scopes, entities, policies, system prompt)
 5. Accepts connections from any MCP client (Claude Desktop, Cursor, VS Code, custom agents)
 6. Enforces scope-first governance on every query
 7. Returns quality-annotated context with mandatory metadata envelope
 8. Runs as a single OS process on commodity hardware with zero external dependencies
+9. Supports both in-memory (default) and persistent (`--persist`) storage modes
 
-**License:** MIT (open source)
+**License:** Business Source License 1.1 with an April 8, 2030 change date to MIT License. See `LICENSE` at the repo root for the full text and restrictions on third-party commercial hosting.
 
-**What is NOT in this repo:** Multi-agent runtime (agent taxonomy, co-sponsorship, permission intersection), human-agent coupling management, lease-based resource governance, context contamination prevention, COMPARE/HYPOTHESIZE/ANCHOR primitives. These are UNICA commercial platform features (separate repo, proprietary).
+**Patent filing:** Non-provisional patent filed April 9, 2026 (Application 64/034,544), covering the CQR query language, agent generation contract, adapter architecture, and governance invariance boundary.
+
+**What is NOT in this repo:** Multi-agent runtime (agent taxonomy, co-sponsorship, permission intersection), human-agent coupling management, lease-based resource governance, context contamination prevention, COMPARE/HYPOTHESIZE/ANCHOR/AWARENESS primitives. These are UNICA commercial platform features (separate repo, proprietary).
 
 ---
 
@@ -132,7 +135,7 @@ Adapters self-declare capabilities (which primitives they support). The engine r
 
 ## 4. CQR Primitives (V1 MCP Scope)
 
-The full protocol defines 11 primitives (see `README.md`). The V1 MCP server in this repo implements three: RESOLVE, DISCOVER, and CERTIFY. ASSERT is specified and is the next primitive to land.
+The full protocol defines 11 primitives (see `README.md`). The V1 MCP server in this repo implements **seven**: RESOLVE, DISCOVER, ASSERT, CERTIFY, TRACE, SIGNAL, REFRESH. The remaining four (HYPOTHESIZE, COMPARE, ANCHOR, AWARENESS) are specified in the protocol and ship in V2.
 
 ### RESOLVE — Canonical Retrieval
 Retrieve a canonical entity by semantic address from the nearest matching scope, with quality metadata.
@@ -175,6 +178,50 @@ CERTIFY entity:finance:arr
 Statuses: `proposed → under_review → certified → superseded`. The full lifecycle is supported and persists — once certified, the status is visible on subsequent RESOLVE calls in the quality envelope (`certified_by`, `certified_at`).
 
 `AUTHORITY` accepts either a bare identifier (`cfo`) or a quoted free-form string (`"agent:twin:michael"`, `"finance_team:q4_2026"`). The quoted form allows colons and other punctuation in opaque authority IDs. `EVIDENCE` is always a quoted string.
+
+### ASSERT — Agent-Written Context with Provenance
+Writes uncertified context into the graph with mandatory `INTENT` and `DERIVED_FROM` fields. The asserted entity is immediately visible to RESOLVE and DISCOVER, but carries lower trust (reputation 0.5, `certified: false`) and an audit trail linking it back to the source entities and the asserting agent's intent.
+
+```
+ASSERT entity:product:churn_velocity
+  TYPE derived_metric
+  DESCRIPTION "Rate of change in churn over 30d rolling window"
+  INTENT "Answer CEO question on whether churn is accelerating"
+  DERIVED_FROM entity:product:churn_rate, entity:product:nps
+  IN scope:company:product
+  CONFIDENCE 0.7
+```
+
+Valid `TYPE` values: `metric`, `definition`, `policy`, `derived_metric`, `observation`, `recommendation`. Optional inline relationships attach at write time via the `REL:entity:ns:name:strength` shorthand in the MCP tool arg; valid types are `CORRELATES_WITH`, `CONTRIBUTES_TO`, `DEPENDS_ON`, `CAUSES`, `PART_OF`.
+
+### TRACE — Provenance History
+Walks the provenance chain of an entity: assertion record, certification history, signal history, and the `DERIVED_FROM` lineage out to a configurable causal depth. An optional time window filters events.
+
+```
+TRACE entity:product:churn_velocity OVER last 30d DEPTH causal:2
+```
+
+TRACE is the reverse lens of DISCOVER. Where DISCOVER asks "what is this related to?", TRACE asks "how did this come to be, and what changed it?".
+
+### SIGNAL — Reputation Update with Evidence
+Writes a reputation assessment. Creates an immutable `SignalRecord` audit node and updates the entity's current reputation score. Certification status is **preserved** — a certified entity with a dropped reputation is expressible and correct ("certified but currently degraded").
+
+```
+SIGNAL reputation ON entity:product:churn_velocity SCORE 0.35
+  EVIDENCE "Upstream churn_rate pipeline is 6 days stale"
+```
+
+SignalRecords are surfaced through TRACE as part of the entity's provenance chain.
+
+### REFRESH — Staleness Scan
+`CHECK` mode scans every entity visible to the agent and returns those whose freshness exceeds a threshold, sorted most-stale-first.
+
+```
+REFRESH CHECK active_context WITHIN scope:company:product
+  WHERE age > 24h RETURN stale_items
+```
+
+Intended as a lightweight periodic health check from agent loops or a pre-flight before high-stakes questions.
 
 ---
 
@@ -267,6 +314,8 @@ Scope is not a filter applied after retrieval. It is a fundamental part of query
 
 ### Tools
 
+Seven MCP tools are exposed. Full parameter documentation is in `docs/mcp-integration.md`; the summary:
+
 ```
 cqr_resolve:
   input: {entity, scope?, freshness?, reputation?}
@@ -278,10 +327,28 @@ cqr_discover:
           and quality annotations
   direction: outbound | inbound | both (default: both)
 
+cqr_assert:
+  input: {entity, type, description, intent, derived_from,
+          scope?, confidence?, relationships?}
+  output: written entity with assertion record and derived_from links
+  required: entity, type, description, intent, derived_from
+
 cqr_certify:
   input: {entity, status, authority?, evidence?}
   output: certification status with provenance chain
   authority: bare identifier OR quoted free-form string with colons
+
+cqr_trace:
+  input: {entity, depth?, time_window?}
+  output: assertion + certification + signal history plus derived_from chain
+
+cqr_signal:
+  input: {entity, score, evidence}
+  output: reputation update with SignalRecord; certification preserved
+
+cqr_refresh:
+  input: {threshold?, scope?}
+  output: stale_items sorted most-stale-first within the agent's scope
 ```
 
 ### Resources

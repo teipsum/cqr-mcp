@@ -80,6 +80,38 @@ All query traffic is routed through `Cqr.Grafeo.Server`, a GenServer that owns t
 
 Grafeo runs in-memory by default. Pass `--persist` at startup for durable storage across restarts — the server opens or creates `~/.cqr/grafeo.grafeo` (or a custom path supplied after the flag) and skips the sample-data seeder. See `README.md` for the full flag reference.
 
+### Persistent storage details
+
+Persistent mode uses Grafeo's **SingleFile** storage format. The database lives in a
+single file with the `.grafeo` extension (the extension is load-bearing -- Grafeo
+dispatches on it to select the SingleFile backend; an ordinary `.db` or no
+extension silently drops to the wrong backend and fails to persist). The WAL
+durability mode is set to **Sync** so each commit flushes before returning;
+async-WAL was the original default and lost data on abrupt termination.
+
+On `--persist` startup with an empty database, the application bootstraps the
+scope hierarchy (`Cqr.Repo.ScopeTree`) from the default tree but does **not**
+run the sample-data seeder -- persistent mode is intended for real organizational
+data, loaded via `cqr_assert`, adapter imports, or `mix cqr.populate`. The
+`--reset` flag wipes the file and re-seeds the sample dataset as a factory reset.
+
+Clean shutdown is required for the on-disk format to be consistent. The
+`Cqr.Grafeo.Server` traps exits and closes the NIF handle on SIGTERM; SIGKILL
+skips this path and can leave the file in a partially-written state that fails
+to reopen. The convenience `cqr` script in `scripts/cqr` (intended for
+`~/bin/cqr`) implements a SIGTERM-first / short-wait / SIGKILL-fallback restart
+pattern and uses `--sname cqr` to give the BEAM a stable name that `pkill` can
+target reliably. Claude Desktop's own restart path does the right thing here;
+the script is for manual operator restarts while iterating.
+
+The `mix cqr.populate` task opens the persistent database directly (bypassing
+the MCP transport) and runs ~178 `ASSERT` calls through `Cqr.Engine.execute/2`.
+The full governance pipeline fires on every assertion -- parser, scope
+validation, adapter writes, embedding computation -- so the populated database
+is indistinguishable from one built through the MCP surface. The MCP server
+must be stopped before running the task; only one process can hold the Grafeo
+file lock.
+
 ## 3. Multi-Paradigm Query Composition
 
 The architectural innovation in CQR is how a single DISCOVER invocation composes multiple query paradigms against a single embedded backend.
@@ -97,7 +129,63 @@ The critical design choice is the **ordering**: stage 1 runs first and constrain
 - **Result-set sizes are predictable.** Bounded by scope cardinality, not by top-k against a global corpus. Query cost scales with the agent's scope, not with total database size.
 - **Compute efficiency on large corpora.** Vector similarity over a governed subset is orders of magnitude cheaper than over the full index.
 
-## 4. Adapter Behaviour Contract
+## 4. Primitive Implementations
+
+Seven primitives ship in V1 as MCP tools. Each one maps to an adapter callback
+and a path through `Cqr.Engine.execute/2`; the engine sees them uniformly but
+the shape of the work behind each differs.
+
+- **RESOLVE** -- Cypher point-lookup in the visible scope set. Walks the
+  scope fallback chain when the primary scope has no authoritative answer.
+  Optional freshness and reputation constraints are pushed into the query as
+  `WHERE` predicates, not applied post-hoc.
+
+- **DISCOVER** -- The composite traversal described in Section 3. Accepts
+  either a typed entity (`entity:ns:name`) as a graph anchor or a free-text
+  search term, which triggers BM25 + HNSW against the visible candidate set.
+  Supports `DEPTH` and `DIRECTION` (`outbound` / `inbound` / `both`).
+
+- **ASSERT** -- Writes an entity with a mandatory `INTENT` and
+  `DERIVED_FROM` paper trail, plus an `AssertionRecord` audit node linked to
+  the asserting agent. Reputation is pinned at 0.5 and `certified` is false
+  until a subsequent `CERTIFY`. Optional inline relationships are created in
+  the same transaction against a whitelist of five types (`CORRELATES_WITH`,
+  `CONTRIBUTES_TO`, `DEPENDS_ON`, `CAUSES`, `PART_OF`).
+
+- **CERTIFY** -- Moves an entity through `proposed -> under_review ->
+  certified -> superseded`. Each transition writes a `CertificationRecord`
+  audit node with authority and evidence; the entity's current status is
+  denormalized onto the node for cheap RESOLVE-time reads. Invalid
+  transitions return `:invalid_transition` with the current status and the
+  valid next states in the error envelope.
+
+- **TRACE** -- Walks the provenance chain of an entity. Collects the
+  `AssertionRecord`, the full `CertificationRecord` history, the
+  `SignalRecord` history, and follows `DERIVED_FROM` links outward to the
+  configured causal depth. An optional time window (`OVER last 7d`) filters
+  the event set. This is the reverse lens of DISCOVER: where DISCOVER asks
+  "what is this related to?", TRACE asks "how did this come to be, and what
+  changed it?".
+
+- **SIGNAL** -- Writes a reputation assessment with evidence. Creates an
+  immutable `SignalRecord` audit node and updates the entity's current
+  reputation score atomically. Certification status is **preserved**: a
+  certified entity with a dropped reputation is expressible and correct
+  ("certified but currently degraded"). SignalRecords are surfaced through
+  TRACE as part of the entity's provenance.
+
+- **REFRESH** -- `CHECK` mode scans every entity visible to the agent,
+  returns those whose freshness exceeds a threshold (default `24h`), sorted
+  most-stale-first. Intended for periodic health checks from agent loops and
+  pre-flight checks before high-stakes questions. Scope-bounded: the scan
+  respects the agent's `visible_scopes` set, so a company-wide sweep and a
+  finance-team sweep return disjoint stale lists against the same database.
+
+V2 primitives (HYPOTHESIZE, COMPARE, ANCHOR, AWARENESS) are specified in the
+protocol but not yet implemented; their adapter callbacks are not in the
+current `Cqr.Adapter.Behaviour`.
+
+## 5. Adapter Behaviour Contract
 
 `Cqr.Adapter.Behaviour` defines the contract every storage backend implements:
 
@@ -119,7 +207,7 @@ The engine's `Planner` inspects each adapter's `capabilities/0` and routes expre
 
 Grafeo is the reference implementation. The contract is deliberately small so that PostgreSQL/pgvector, Neo4j, Elasticsearch, Snowflake, and custom internal warehouses can be added without touching engine code. Adapter registration is a configuration change.
 
-## 5. Scope Model
+## 6. Scope Model
 
 Scopes form a hierarchical tree (`scope:company → scope:company:product → scope:company:product:mobile`). Scope is a first-class part of query execution, not a post-retrieval filter.
 
@@ -140,7 +228,7 @@ Scope constraints are compiled into the query, not applied afterward. For Cypher
 
 The scope tree is loaded into ETS on startup for sub-millisecond lookups on the hot path. CERTIFY operations that modify the scope hierarchy invalidate the cache entry for the affected subtree and trigger a targeted rebuild. Full cache rebuilds are reserved for startup and explicit admin operations.
 
-## 6. Quality Metadata Envelope
+## 7. Quality Metadata Envelope
 
 Every response from `Cqr.Engine.execute/2` returns a `%Cqr.Result{}` that includes a `%Cqr.Quality{}` envelope:
 
@@ -161,7 +249,7 @@ The envelope is **mandatory and non-optional**. Fields that cannot be populated 
 
 Errors also carry quality context. `%Cqr.Error{}` includes `suggestions`, `similar_entities`, `partial_results`, and `retry_guidance` — errors are cognitive inputs, not exceptions. An agent can read a `scope_access` error and reason over the returned list of visible scopes to self-correct without a second round-trip to the LLM.
 
-## 7. Error Semantics
+## 8. Error Semantics
 
 Errors are data, not exceptions. The engine never raises; every failure path returns `{:error, %Cqr.Error{}}`. Error codes include:
 
@@ -176,6 +264,6 @@ Errors are data, not exceptions. The engine never raises; every failure path ret
 
 Because errors are structured data, an agent's system prompt can teach it to treat them as inputs. The `cqr://system_prompt` MCP resource does exactly that — it instructs the LLM to inspect error envelopes, use suggestions, and only escalate to the human when `retry_guidance` is empty.
 
-## 8. Governance Invariance
+## 9. Governance Invariance
 
 `Cqr.Engine.execute/2` is the single boundary. Everything above it is a delivery concern (MCP, REST, direct call, future LiveView UI); everything below it is a storage concern (adapters, NIF, physical layout). Governance — scope validation, quality annotation, conflict preservation, cost accounting — lives in between and applies uniformly regardless of either. No delivery mechanism can bypass, weaken, or alter governance behavior.
