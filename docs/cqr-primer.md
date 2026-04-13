@@ -17,9 +17,9 @@ This works until you deploy an agent at scale inside an organization that actual
 
 **CQR is the layer that composes.** It is a declarative query protocol designed from the first line for *machine cognition as the primary consumer*. Agents generate CQR expressions directly from natural-language intent. The protocol's primitives correspond to reasoning patterns, not data operations. Quality metadata is mandatory. Scope is first-class. Provenance is built into the grammar of writes.
 
-## Eleven Cognitive Operation Primitives
+## Twelve Cognitive Operation Primitives
 
-CQR defines eleven primitives in five categories. Each one maps to a cognitive operation an agent actually performs, not a CRUD verb.
+CQR defines twelve primitives in six categories. Each one maps to a cognitive operation an agent actually performs, not a CRUD verb.
 
 ### Context Resolution
 
@@ -37,26 +37,31 @@ CQR defines eleven primitives in five categories. Each one maps to a cognitive o
 
 ### Governance
 
-**CERTIFY** — *Lifecycle management.* Definitions move through a formal lifecycle: `proposed → under_review → certified → superseded`. Each transition creates an audit record with authority, evidence, and timestamp. After certification, RESOLVE on the entity returns `certified: true` with the certifying authority in the quality envelope. This is how asserted knowledge becomes organizational truth.
+**CERTIFY** — *Lifecycle management.* Definitions move through a formal lifecycle: `proposed → under_review → certified → (contested → under_review) → superseded → proposed`. `contested` is entered when an UPDATE on a certified entity proposes a redefinition or reclassification; the change is deferred to governance review and the entity rejects further updates until resolved. `superseded` is non-terminal — an UPDATE can revive a superseded entity. Each transition creates an audit record with authority, evidence, and timestamp. After certification, RESOLVE on the entity returns `certified: true` with the certifying authority in the quality envelope.
 
 **SIGNAL** — *Quality assessment.* Writes a reputation score update with evidence and creates an immutable `SignalRecord` audit node. Use SIGNAL when data quality changes — a pipeline refreshed, a source went stale, a validation check failed. Unlike CERTIFY, SIGNAL preserves the entity's certification status while updating its reputation, so "certified but currently degraded" is expressible. Every signal is surfaced through TRACE as part of the entity's provenance chain.
 
-### Maintenance
+### Evolution
+
+**UPDATE** — *Governed knowledge evolution.* Evolves the content of an existing entity while preserving its semantic address. Every UPDATE writes a `VersionRecord` audit node linked by `PREVIOUS_VERSION`, and a mandatory `change_type` (`correction`, `refresh`, `scope_change`, `redefinition`, or `reclassification`) classifies the change. A governance matrix decides the outcome: corrections and refreshes always apply (except on contested entities); semantic changes (`redefinition`, `reclassification`) on a certified entity trigger a contest — the entity transitions to `contested`, a pending `UpdateRecord` is written, and the change is deferred for review. Superseded entities can be revived by any UPDATE. Contested entities reject all updates until the contest resolves.
+
+### Reasoning
+
+**HYPOTHESIZE** — *Impact projection.* Projects outbound effects of an assumed change through the relationship graph with confidence scoring. Bounded by causal depth; the relationship graph is not modified.
+
+**COMPARE** — *Multi-entity analysis.* Side-by-side comparison of multiple entities, surfacing shared relationships, divergent properties, and quality differentials within the agent's visible scope.
+
+**ANCHOR** — *Epistemic grounding.* Evaluates the composite confidence of a set of resolved entities treated as a reasoning chain, returning a weakest-link floor and actionable recommendations for the entities dragging the chain down.
+
+### Maintenance & Perception
 
 **REFRESH** — *Staleness scan.* `CHECK` mode scans every entity visible to the agent and returns those whose freshness exceeds a configurable threshold, sorted most-stale-first. This is a lightweight periodic health check — an agent loop can call REFRESH before answering questions to identify context that needs attention and proactively re-read, re-signal, or escalate it before the staleness silently corrupts downstream reasoning.
 
-### V2 Primitives (Not Yet Shipped)
+**AWARENESS** — *Ambient perception.* Returns the other agents operating within the visible scope set, their declared intent, and the resources they hold. Enables coordination without explicit messaging.
 
-Four further primitives are specified but not yet shipped in this MCP server:
+**All twelve primitives ship as MCP tools in this server.** RESOLVE, DISCOVER, ASSERT, CERTIFY, SIGNAL, UPDATE, TRACE, REFRESH, COMPARE, HYPOTHESIZE, ANCHOR, and AWARENESS are all exposed, alongside a `cqr_assert_batch` throughput tool for high-volume writes.
 
-- **HYPOTHESIZE** *(Reasoning)* — projects outbound effects of an assumed change through the relationship graph with confidence scoring.
-- **COMPARE** *(Reasoning)* — side-by-side comparison of multiple entities, surfacing shared relationships and quality differentials.
-- **ANCHOR** *(Reasoning)* — evaluates the composite confidence of a set of resolved entities as a reasoning chain, returning a weakest-link floor and actionable recommendations.
-- **AWARENESS** *(Perception)* — ambient perception of other agents operating in scope, their declared intent, and the resources they hold. Enables coordination without explicit messaging.
-
-**This server implements seven primitives: RESOLVE, DISCOVER, ASSERT, CERTIFY, TRACE, SIGNAL, REFRESH.** The remaining four primitives are specified in the protocol and ship in V2.
-
-## What the Seven Shipped Primitives Look Like
+## What the Shipped Primitives Look Like
 
 Each MCP tool wraps a CQR expression. Seeing both forms side by side is the
 fastest way to internalize the grammar. All examples assume an agent operating
@@ -129,6 +134,25 @@ SIGNAL reputation ON entity:product:churn_velocity SCORE 0.35
 MCP call: `cqr_signal` with `{"entity": ..., "score": 0.35, "evidence": "..."}`.
 Certification status is preserved; only the reputation score moves. The
 SignalRecord is surfaced on the next TRACE.
+
+**UPDATE.** An agent evolves an entity's content without changing its address.
+
+```
+UPDATE entity:product:churn_velocity
+  CHANGE_TYPE correction
+  DESCRIPTION "Corrected denominator: rolling 30-day MRR, not ARR"
+  EVIDENCE "Audit surfaced inconsistent denominator against finance standard"
+  CONFIDENCE 0.9
+```
+
+MCP call: `cqr_update` with `{"entity": "entity:product:churn_velocity",
+"change_type": "correction", "description": "...", "evidence": "...",
+"confidence": 0.9}`. A `VersionRecord` capturing the previous state is written
+and linked via `PREVIOUS_VERSION`. For a `correction` or `refresh` on a
+certified entity the change applies immediately and certification is preserved.
+A `redefinition` on the same certified entity would instead transition the
+entity to `contested`, write a pending `UpdateRecord`, and defer the change to
+governance review.
 
 **REFRESH.** A scheduled health check.
 
