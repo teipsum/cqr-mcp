@@ -14,7 +14,7 @@ defmodule Cqr.Engine do
   See PROJECT_KNOWLEDGE.md Section 3.3 for the data flow.
   """
 
-  alias Cqr.Engine.{Assert, Awareness, Certify, Planner, Refresh, Signal, Trace}
+  alias Cqr.Engine.{Assert, Awareness, Certify, Hypothesize, Planner, Refresh, Signal, Trace}
 
   @doc """
   Execute a CQR expression within an agent context.
@@ -167,6 +167,10 @@ defmodule Cqr.Engine do
 
   defp dispatch(%Cqr.Awareness{} = ast, _scope_context, context) do
     Awareness.execute(ast, context)
+  end
+
+  defp dispatch(%Cqr.Hypothesize{} = ast, _scope_context, context) do
+    Hypothesize.execute(ast, context)
   end
 
   defp dispatch(ast, scope_context, context) do

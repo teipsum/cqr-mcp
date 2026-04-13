@@ -18,7 +18,17 @@ defmodule Cqr.Parser do
 
   import NimbleParsec
 
-  alias Cqr.Parser.{Assert, Awareness, Certify, Discover, Refresh, Resolve, Signal, Trace}
+  alias Cqr.Parser.{
+    Assert,
+    Awareness,
+    Certify,
+    Discover,
+    Hypothesize,
+    Refresh,
+    Resolve,
+    Signal,
+    Trace
+  }
 
   defparsec(
     :parse_expression,
@@ -30,7 +40,8 @@ defmodule Cqr.Parser do
       Trace.trace(),
       Signal.signal(),
       Refresh.refresh(),
-      Awareness.awareness()
+      Awareness.awareness(),
+      Hypothesize.hypothesize()
     ])
     |> eos()
   )
@@ -114,8 +125,11 @@ defmodule Cqr.Parser do
       String.starts_with?(rest, "AWARENES") ->
         "Did you mean AWARENESS?"
 
+      String.starts_with?(rest, "HYPOTHESIZ") or String.starts_with?(rest, "HYPOTH") ->
+        "Did you mean HYPOTHESIZE?"
+
       true ->
-        "Expression must start with RESOLVE, DISCOVER, CERTIFY, ASSERT, TRACE, SIGNAL, REFRESH, or AWARENESS. Unexpected: \"#{String.slice(rest, 0, 20)}\""
+        "Expression must start with RESOLVE, DISCOVER, CERTIFY, ASSERT, TRACE, SIGNAL, REFRESH, AWARENESS, or HYPOTHESIZE. Unexpected: \"#{String.slice(rest, 0, 20)}\""
     end
   end
 end
