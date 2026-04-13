@@ -19,11 +19,23 @@ defmodule CqrMcp.Application do
     children = [
       {Cqr.Grafeo.Server, storage: storage, seed: seed, reset: reset},
       Cqr.Repo.ScopeTree,
-      CqrMcp.Server
+      CqrMcp.Server,
+      {Bandit, plug: CqrMcp.SSE.Router, port: sse_port()}
     ]
 
     opts = [strategy: :one_for_one, name: CqrMcp.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  # Port for the MCP SSE/HTTP transport. Resolution order:
+  # 1. `CQR_MCP_PORT` environment variable
+  # 2. `config :cqr_mcp, :sse_port`
+  # 3. Default 4000
+  defp sse_port do
+    case System.get_env("CQR_MCP_PORT") do
+      nil -> Application.get_env(:cqr_mcp, :sse_port, 4000)
+      str -> String.to_integer(str)
+    end
   end
 
   # Parse --persist and --reset from the command line.
