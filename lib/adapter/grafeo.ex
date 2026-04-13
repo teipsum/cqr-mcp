@@ -16,7 +16,17 @@ defmodule Cqr.Adapter.Grafeo do
 
   @impl true
   def capabilities,
-    do: [:resolve, :discover, :assert, :trace, :signal, :refresh, :awareness, :hypothesize]
+    do: [
+      :resolve,
+      :discover,
+      :assert,
+      :trace,
+      :signal,
+      :refresh,
+      :awareness,
+      :hypothesize,
+      :compare
+    ]
 
   @impl true
   def resolve(%Cqr.Resolve{entity: entity} = expression, scope_context, _opts) do
@@ -1637,6 +1647,206 @@ defmodule Cqr.Adapter.Grafeo do
       total_affected: length(rows),
       max_depth_reached: max_depth_reached,
       mean_hop_confidence: Enum.sum(confidences) / length(confidences)
+    }
+  end
+
+  # --- COMPARE ---
+
+  @impl true
+  def compare(%Cqr.Compare{entities: entities, include: include}, scope_context, _opts) do
+    visible = scope_context[:visible_scopes] || []
+
+    case fetch_per_entity(entities, visible) do
+      {:ok, per_entity} ->
+        {:ok, build_compare_result(per_entity, include)}
+
+      {:error, %Cqr.Error{} = err} ->
+        {:error, err}
+    end
+  end
+
+  # Materialize each entity's data + its outbound and inbound relationship
+  # set in one shot. Visibility is enforced inside the relationship queries
+  # (Semantic.related_entities passes the scope filter into MATCH) so the
+  # per-entity relationship list never includes targets the agent cannot
+  # see. Engine.Compare has already verified each anchor is visible.
+  defp fetch_per_entity(entities, visible) do
+    Enum.reduce_while(entities, {:ok, []}, fn entity, {:ok, acc} ->
+      with {:ok, data} <- Semantic.get_entity(entity, visible),
+           {:ok, out} <- Semantic.related_entities(entity, 1, visible, nil),
+           {:ok, inb} <- Semantic.related_entities_inbound(entity, 1, visible, nil) do
+        {:cont, {:ok, [{entity, data, out ++ inb} | acc]}}
+      else
+        {:error, reason} ->
+          {:halt,
+           {:error, %Cqr.Error{code: :adapter_error, message: "Grafeo error: #{inspect(reason)}"}}}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      other -> other
+    end
+  end
+
+  defp build_compare_result(per_entity, include) do
+    refs = Enum.map(per_entity, fn {entity, _, _} -> Cqr.Types.format_entity(entity) end)
+
+    per_entity_summary =
+      Map.new(per_entity, fn {entity, data, _rels} ->
+        {Cqr.Types.format_entity(entity), entity_summary(data)}
+      end)
+
+    rel_signatures =
+      Map.new(per_entity, fn {entity, _data, rels} ->
+        {Cqr.Types.format_entity(entity), Enum.map(rels, &relationship_signature/1)}
+      end)
+
+    row =
+      %{
+        entities: refs,
+        per_entity: per_entity_summary,
+        relationship_overlap: rel_signatures
+      }
+      |> maybe_put(:relationships, include, fn ->
+        compute_shared_relationships(rel_signatures)
+      end)
+      |> maybe_put(:differing_properties, include, fn ->
+        compute_differing_properties(per_entity)
+      end)
+      |> maybe_put(:quality_differences, include, fn ->
+        compute_quality_differences(per_entity)
+      end)
+
+    quality = aggregate_quality(per_entity)
+
+    %Cqr.Result{
+      data: [row],
+      sources: ["grafeo"],
+      quality: quality
+    }
+  end
+
+  # The INCLUDE list is a positive selector — when callers omit it the
+  # parser fills in the full default set, so an empty include here still
+  # surfaces every facet rather than silently dropping work.
+  defp maybe_put(row, :relationships, include, fun) do
+    if include == [] or :relationships in include,
+      do: Map.put(row, :shared_relationships, fun.()),
+      else: row
+  end
+
+  defp maybe_put(row, :differing_properties, include, fun) do
+    if include == [] or :properties in include,
+      do: Map.put(row, :differing_properties, fun.()),
+      else: row
+  end
+
+  defp maybe_put(row, :quality_differences, include, fun) do
+    if include == [] or :quality in include,
+      do: Map.put(row, :quality_differences, fun.()),
+      else: row
+  end
+
+  defp entity_summary(data) do
+    %{
+      type: data[:type],
+      description: data[:description],
+      owner: data[:owner],
+      reputation: data[:reputation],
+      certified: data[:certified],
+      certified_by: data[:certified_by],
+      certified_at: data[:certified_at],
+      freshness_hours_ago: data[:freshness_hours_ago],
+      scopes: Enum.map(data[:scopes] || [], &Cqr.Types.format_scope/1)
+    }
+  end
+
+  # Shape used to detect "the same relationship" across entities. We treat
+  # (relationship_type, target_entity, direction) as the identity key so
+  # two entities that both point AT arr via CONTRIBUTES_TO are recognised
+  # as sharing the same relationship even though their target string is
+  # identical.
+  defp relationship_signature(rel) do
+    %{
+      relationship: rel.relationship,
+      target: Cqr.Types.format_entity(rel.entity),
+      direction: rel.direction
+    }
+  end
+
+  # Intersection across every entity's signature set. With two entities
+  # this is the classic pairwise overlap; with N entities it returns the
+  # signatures present in ALL of them.
+  defp compute_shared_relationships(rel_signatures) do
+    case Map.values(rel_signatures) do
+      [] ->
+        []
+
+      [first | rest] ->
+        first_set = MapSet.new(first)
+
+        common =
+          Enum.reduce(rest, first_set, fn sigs, acc ->
+            MapSet.intersection(acc, MapSet.new(sigs))
+          end)
+
+        MapSet.to_list(common)
+    end
+  end
+
+  @comparable_properties [:type, :description, :owner]
+
+  defp compute_differing_properties(per_entity) do
+    Enum.flat_map(@comparable_properties, fn prop ->
+      values =
+        Map.new(per_entity, fn {entity, data, _} ->
+          {Cqr.Types.format_entity(entity), data[prop]}
+        end)
+
+      if values |> Map.values() |> Enum.uniq() |> length() > 1 do
+        [%{property: prop, values: values}]
+      else
+        []
+      end
+    end)
+  end
+
+  @quality_properties [:reputation, :certified, :certified_by, :freshness_hours_ago]
+
+  # Reports the per-entity value for every quality property regardless of
+  # whether it differs — the agent comparing two entities wants to see
+  # both reputations even when they happen to be equal. The "differences"
+  # framing reflects intent, not a uniqueness filter.
+  defp compute_quality_differences(per_entity) do
+    Map.new(@quality_properties, fn prop ->
+      values =
+        Map.new(per_entity, fn {entity, data, _} ->
+          {Cqr.Types.format_entity(entity), data[prop]}
+        end)
+
+      {prop, values}
+    end)
+  end
+
+  # Quality envelope for the comparison result itself: average reputation
+  # across the compared entities (so the cost/quality view in the engine
+  # remains coherent), and a fixed provenance string so callers know this
+  # came from a COMPARE pipeline.
+  defp aggregate_quality(per_entity) do
+    reputations =
+      per_entity
+      |> Enum.map(fn {_, data, _} -> data[:reputation] end)
+      |> Enum.filter(&is_number/1)
+
+    avg_reputation =
+      case reputations do
+        [] -> :unknown
+        rs -> Enum.sum(rs) / length(rs)
+      end
+
+    %Cqr.Quality{
+      reputation: avg_reputation,
+      provenance: "COMPARE across #{length(per_entity)} entities"
     }
   end
 end

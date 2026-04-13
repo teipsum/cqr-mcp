@@ -33,6 +33,9 @@ defmodule Cqr.Adapter.Behaviour do
   @callback hypothesize(expression :: term(), scope_context :: term(), opts :: keyword()) ::
               {:ok, term()} | {:error, term()}
 
+  @callback compare(expression :: term(), scope_context :: term(), opts :: keyword()) ::
+              {:ok, term()} | {:error, term()}
+
   @callback normalize(raw_results :: term(), metadata :: term()) :: term()
 
   @callback health_check() :: :ok | {:error, term()}
@@ -45,6 +48,7 @@ defmodule Cqr.Adapter.Behaviour do
     signal: 3,
     refresh_check: 3,
     awareness: 3,
-    hypothesize: 3
+    hypothesize: 3,
+    compare: 3
   ]
 end
