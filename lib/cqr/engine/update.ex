@@ -15,10 +15,17 @@ defmodule Cqr.Engine.Update do
     * **under_review** — `:redefinition` and `:reclassification` are
       blocked ("complete review first"). Others apply without touching
       certification.
-    * **certified** — `:correction`, `:refresh`, `:scope_change` apply
-      and preserve certification. `:redefinition` and `:reclassification`
-      do NOT apply immediately: the entity transitions to `:contested`
-      and a pending `UpdateRecord` is written for governance review.
+    * **certified** — behavior is governed by the
+      `:certification_preservation_policy` application config
+      (`:cqr_mcp, :certification_preservation_policy`):
+        * `:strict` — every change_type transitions the entity to
+          `:contested` (pending human review). No exceptions.
+        * `:standard` (default) — `:correction`, `:refresh`,
+          `:scope_change` apply and preserve certification;
+          `:redefinition` and `:reclassification` transition to
+          `:contested` via a pending `UpdateRecord`.
+        * `:permissive` — every change_type applies immediately and
+          preserves certification.
     * **contested** — all updates blocked until the contest is resolved.
   """
 
@@ -63,17 +70,13 @@ defmodule Cqr.Engine.Update do
 
   # --- Governance matrix ---
 
-  # Pending-review: certified content-semantic changes must go through a
-  # contest before they take effect.
+  # Certified: dispatch to the configured preservation policy. The policy
+  # is read at runtime so operators can tune the strictness without a
+  # recompile.
   defp governance_decision(:certified, change_type)
-       when change_type in [:redefinition, :reclassification] do
-    {:ok, :pending_review}
-  end
-
-  # Certified non-semantic updates: apply and keep the certification.
-  defp governance_decision(:certified, change_type)
-       when change_type in [:correction, :refresh, :scope_change] do
-    {:ok, {:apply, reset_cert: false, reset_reputation: false}}
+       when change_type in @valid_change_types do
+    policy = Application.get_env(:cqr_mcp, :certification_preservation_policy, :standard)
+    certified_decision(policy, change_type)
   end
 
   # Under review + semantic change: finish the review first.
@@ -124,6 +127,18 @@ defmodule Cqr.Engine.Update do
   defp governance_decision(status, _change_type) when status in [nil, :proposed] do
     {:ok, {:apply, reset_cert: false, reset_reputation: false}}
   end
+
+  defp certified_decision(:strict, _change_type), do: {:ok, :pending_review}
+
+  defp certified_decision(:permissive, _change_type),
+    do: {:ok, {:apply, reset_cert: false, reset_reputation: false}}
+
+  defp certified_decision(:standard, change_type)
+       when change_type in [:redefinition, :reclassification],
+       do: {:ok, :pending_review}
+
+  defp certified_decision(:standard, _change_type),
+    do: {:ok, {:apply, reset_cert: false, reset_reputation: false}}
 
   # --- Validation ---
 

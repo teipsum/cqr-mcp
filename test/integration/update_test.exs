@@ -330,6 +330,157 @@ defmodule Cqr.Integration.UpdateTest do
     end
   end
 
+  describe "certification preservation policy — :strict" do
+    setup do
+      Application.put_env(:cqr_mcp, :certification_preservation_policy, :strict)
+      on_exit(fn -> Application.delete_env(:cqr_mcp, :certification_preservation_policy) end)
+      :ok
+    end
+
+    test "correction on certified entity transitions to contested (pending review)" do
+      assert_fixture("strict_correction")
+
+      for s <- ["proposed", "under_review", "certified"] do
+        certify("strict_correction", s, "authority:data_governance_board")
+      end
+
+      assert {:ok, r} =
+               update("strict_correction", :correction,
+                 description: "Typo fixed",
+                 evidence: "Fixing a typo"
+               )
+
+      row = hd(r.data)
+      assert row.status == "pending_review"
+      assert row.change_type == :correction
+
+      after_update = resolve("strict_correction")
+      assert after_update.description == "Original description"
+      assert after_update.certification_status == "contested"
+      assert after_update.certified == false
+    end
+
+    test "refresh on certified entity transitions to contested (pending review)" do
+      assert_fixture("strict_refresh")
+
+      for s <- ["proposed", "under_review", "certified"] do
+        certify("strict_refresh", s, "authority:data_governance_board")
+      end
+
+      assert {:ok, r} =
+               update("strict_refresh", :refresh,
+                 description: "Refreshed copy",
+                 evidence: "Re-validated source"
+               )
+
+      row = hd(r.data)
+      assert row.status == "pending_review"
+      assert row.change_type == :refresh
+
+      after_update = resolve("strict_refresh")
+      assert after_update.description == "Original description"
+      assert after_update.certification_status == "contested"
+    end
+  end
+
+  describe "certification preservation policy — :standard (default)" do
+    test "no config set behaves as :standard (correction preserves certification)" do
+      assert Application.get_env(:cqr_mcp, :certification_preservation_policy) == nil
+
+      assert_fixture("default_correction")
+
+      for s <- ["proposed", "under_review", "certified"] do
+        certify("default_correction", s, "authority:data_governance_board")
+      end
+
+      assert {:ok, r} =
+               update("default_correction", :correction,
+                 description: "Typo fixed",
+                 evidence: "Fixing a typo"
+               )
+
+      assert hd(r.data).status == "applied"
+
+      resolved = resolve("default_correction")
+      assert resolved.description == "Typo fixed"
+      assert resolved.certified == true
+      assert resolved.certification_status == "certified"
+    end
+
+    test "explicit :standard: redefinition transitions to contested" do
+      Application.put_env(:cqr_mcp, :certification_preservation_policy, :standard)
+      on_exit(fn -> Application.delete_env(:cqr_mcp, :certification_preservation_policy) end)
+
+      assert_fixture("standard_redef")
+
+      for s <- ["proposed", "under_review", "certified"] do
+        certify("standard_redef", s, "authority:data_governance_board")
+      end
+
+      assert {:ok, r} =
+               update("standard_redef", :redefinition,
+                 description: "New meaning",
+                 evidence: "Semantic change"
+               )
+
+      assert hd(r.data).status == "pending_review"
+
+      after_update = resolve("standard_redef")
+      assert after_update.description == "Original description"
+      assert after_update.certification_status == "contested"
+    end
+  end
+
+  describe "certification preservation policy — :permissive" do
+    setup do
+      Application.put_env(:cqr_mcp, :certification_preservation_policy, :permissive)
+      on_exit(fn -> Application.delete_env(:cqr_mcp, :certification_preservation_policy) end)
+      :ok
+    end
+
+    test "redefinition on certified entity applies immediately, preserves certification" do
+      assert_fixture("permissive_redef")
+
+      for s <- ["proposed", "under_review", "certified"] do
+        certify("permissive_redef", s, "authority:data_governance_board")
+      end
+
+      assert {:ok, r} =
+               update("permissive_redef", :redefinition,
+                 description: "Redefined meaning",
+                 evidence: "Permissive policy allows it"
+               )
+
+      assert hd(r.data).status == "applied"
+
+      resolved = resolve("permissive_redef")
+      assert resolved.description == "Redefined meaning"
+      assert resolved.certified == true
+      assert resolved.certification_status == "certified"
+    end
+
+    test "reclassification on certified entity applies immediately, preserves certification" do
+      assert_fixture("permissive_reclass")
+
+      for s <- ["proposed", "under_review", "certified"] do
+        certify("permissive_reclass", s, "authority:data_governance_board")
+      end
+
+      assert {:ok, r} =
+               update("permissive_reclass", :reclassification,
+                 description: "Reclassified",
+                 evidence: "Permissive policy allows it"
+               )
+
+      assert hd(r.data).status == "applied"
+
+      resolved = resolve("permissive_reclass")
+      assert resolved.description == "Reclassified"
+      assert resolved.certified == true
+      assert resolved.certification_status == "certified"
+    end
+  end
+
   describe "validation" do
     test "UPDATE without CHANGE_TYPE fails with missing_required_field" do
       assert_fixture("missing_ct")
