@@ -6,6 +6,33 @@ defmodule Cqr.Adapter.Behaviour do
   implements this behaviour. The engine routes expressions to adapters
   based on their declared capabilities.
 
+  ## Hierarchical entity addressing (v0.4.0)
+
+  Hierarchical addresses are transparent to this contract. The grammar's
+  `entity:<segment>(:<segment>)*` terminal reduces to the same
+  `{namespace, name}` tuple shape callbacks already receive — the
+  `namespace` string may contain `:` separators when the address is
+  deeper than three segments, but no callback signatures change.
+
+  Engine-layer concerns that adapters do not need to re-implement:
+
+    * `CONTAINS` edge management and container auto-creation on ASSERT
+      (handled by `Cqr.Engine.Assert` against the Grafeo reference
+      adapter; non-Grafeo adapters can opt in by implementing the same
+      semantics or mark `assert/3` unsupported via `capabilities/0`).
+    * Post-assert integrity verification of the container chain.
+    * Containment-aware visibility resolution — the engine walks the
+      `CONTAINS` chain root-to-leaf and returns `entity_not_found` on
+      any ancestor denial, never `scope_access`.
+    * DISCOVER's `:*` prefix mode — recognized by the parser and
+      dispatched in `Cqr.Discover`; adapters see only the resolved
+      anchor or candidate set.
+
+  In short: read-only adapters require no changes for hierarchical
+  addresses; write-capable adapters that want feature parity with
+  Grafeo should mirror its `CONTAINS` semantics, but the contract
+  does not require it.
+
   See PROJECT_KNOWLEDGE.md Section 3.4.
   """
 

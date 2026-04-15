@@ -141,16 +141,28 @@ shape of the work behind each differs.
   `WHERE` predicates, not applied post-hoc.
 
 - **DISCOVER** -- The composite traversal described in Section 3. Accepts
-  either a typed entity (`entity:ns:name`) as a graph anchor or a free-text
-  search term, which triggers BM25 + HNSW against the visible candidate set.
-  Supports `DEPTH` and `DIRECTION` (`outbound` / `inbound` / `both`).
+  three target forms: (1) a typed entity at any depth (`entity:ns:name`,
+  `entity:ns:mid:leaf`, deeper) as a graph anchor; (2) a free-text search
+  term, which triggers BM25 + HNSW against the visible candidate set; or
+  (3) a hierarchical prefix ending in `:*` (`entity:product:retention:*`),
+  which switches to depth-first `CONTAINS` enumeration with branch-level
+  scope pruning -- subtrees whose root the agent cannot see are omitted
+  and not descended into. Supports `DEPTH` and `DIRECTION`
+  (`outbound` / `inbound` / `both`) for the anchor and free-text modes.
 
 - **ASSERT** -- Writes an entity with a mandatory `INTENT` and
   `DERIVED_FROM` paper trail, plus an `AssertionRecord` audit node linked to
   the asserting agent. Reputation is pinned at 0.5 and `certified` is false
   until a subsequent `CERTIFY`. Optional inline relationships are created in
   the same transaction against a whitelist of five types (`CORRELATES_WITH`,
-  `CONTRIBUTES_TO`, `DEPENDS_ON`, `CAUSES`, `PART_OF`).
+  `CONTRIBUTES_TO`, `DEPENDS_ON`, `CAUSES`, `PART_OF`). Entity addresses,
+  `DERIVED_FROM` references, and `RELATIONSHIPS` targets all accept
+  hierarchical paths at unlimited depth. Interior segments missing from the
+  graph are auto-created as container entities in the asserting agent's
+  scope, linked by `CONTAINS` edges from each parent to its child. After
+  every ASSERT a post-write integrity check verifies the leaf's `CONTAINS`
+  chain back to the root is intact; a failed check rolls the assertion back
+  rather than leaving the graph in a partial state.
 
 - **CERTIFY** -- Moves an entity through `proposed -> under_review ->
   certified -> (contested -> under_review) -> superseded -> proposed`.
@@ -260,6 +272,10 @@ Scopes form a hierarchical tree (`scope:company → scope:company:product → sc
 ### Enforcement
 
 Scope constraints are compiled into the query, not applied afterward. For Cypher this means the scope set becomes a `WHERE` clause on node labels before path expansion; for BM25 and HNSW it constrains the index scan. Out-of-scope entities return `not_found`, not `access_denied` — the agent cannot distinguish "this does not exist" from "this exists but is forbidden." This is **genuine invisibility**, and it matters: access-denied errors leak the existence of entities.
+
+### Containment-aware visibility
+
+Hierarchical entity addresses are treated as paths through container entities, so scope is enforced at every node from root to leaf, not just the leaf. When an agent RESOLVEs `entity:product:retention:cohort:q4`, the engine walks the `CONTAINS` chain `product → retention → cohort → q4` and checks scope authorization at every step. **A denial at any ancestor returns `entity_not_found`, never `scope_access`.** The same rule governs DISCOVER prefix mode's branch pruning, ASSERT validation of `DERIVED_FROM` and `RELATIONSHIPS` targets, and every other primitive that names an address. Agents cannot infer the existence or shape of subtrees in scopes they cannot see.
 
 ### ETS cache
 

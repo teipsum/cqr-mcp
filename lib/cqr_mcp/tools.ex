@@ -138,7 +138,15 @@ defmodule CqrMcp.Tools do
           "entity" => %{
             "type" => "string",
             "description" =>
-              "Entity reference in format entity:namespace:name (e.g., entity:finance:arr)"
+              "Entity reference. Addresses are hierarchical with unlimited depth: " <>
+                "entity:namespace:name (e.g., entity:finance:arr), or deeper paths like " <>
+                "entity:product:churn:rolling_30d (3 segments), " <>
+                "entity:product:retention:cohort:q4 (4 segments), " <>
+                "entity:product:retention:cohort:q4:weekly (5 segments). " <>
+                "Each interior segment names a container that is auto-created on first " <>
+                "ASSERT and CONTAINS its descendants. Containment-aware visibility " <>
+                "applies the agent's scope at every level of the path -- a denial at " <>
+                "any ancestor returns entity_not_found, never scope_access."
           },
           "scope" => %{
             "type" => "string",
@@ -171,8 +179,20 @@ defmodule CqrMcp.Tools do
           "topic" => %{
             "type" => "string",
             "description" =>
-              "Entity reference (entity:namespace:name) or a free-text search term. " <>
-                "Pass the search term as a plain string without quotes; the server will quote it."
+              "Entity reference, hierarchical prefix, or free-text search term. " <>
+                "Three modes: " <>
+                "(1) anchor mode -- a full address like entity:product:churn_rate or " <>
+                "entity:product:retention:cohort:q4 returns the neighborhood reachable " <>
+                "via typed relationships (CORRELATES_WITH, DEPENDS_ON, CONTRIBUTES_TO, " <>
+                "etc.); " <>
+                "(2) prefix mode -- a hierarchical address ending in :* like " <>
+                "entity:product:retention:* enumerates every descendant via CONTAINS " <>
+                "edges, depth-first. Branch-level scope pruning hides whole subtrees " <>
+                "the agent cannot see, so a blocked subtree is indistinguishable from " <>
+                "a missing one; " <>
+                "(3) free-text mode -- a plain search term (no entity: prefix) is passed " <>
+                "as a quoted string to BM25 + HNSW; the server quotes it for you, do " <>
+                "not pre-quote."
           },
           "scope" => %{
             "type" => "string",
@@ -216,7 +236,16 @@ defmodule CqrMcp.Tools do
         "properties" => %{
           "entity" => %{
             "type" => "string",
-            "description" => "Semantic address for the new context: entity:namespace:name"
+            "description" =>
+              "Semantic address for the new context. Hierarchical with unlimited depth: " <>
+                "entity:namespace:name or deeper, e.g. entity:product:churn:rolling_30d, " <>
+                "entity:product:retention:cohort:q4 (4 segments), " <>
+                "entity:product:retention:cohort:q4:weekly (5 segments). Interior " <>
+                "segments are auto-created as container entities and CONTAINS edges " <>
+                "are written from each parent to its child. Containers inherit the " <>
+                "scope of the asserting agent, so an agent at scope:company:product " <>
+                "asserting entity:product:retention:cohort:q4:weekly creates the " <>
+                "intermediate retention and cohort containers in scope:company:product."
           },
           "type" => %{
             "type" => "string",
@@ -236,8 +265,10 @@ defmodule CqrMcp.Tools do
           "derived_from" => %{
             "type" => "string",
             "description" =>
-              "Comma-separated source entity references (entity:ns:name,entity:ns:name). " <>
-                "The cognitive lineage this assertion was derived from. Mandatory."
+              "Comma-separated source entity references. Each may be hierarchical at any " <>
+                "depth: entity:ns:name or entity:ns:mid:leaf or deeper, e.g. " <>
+                "'entity:product:churn_rate,entity:product:retention:cohort:q4'. " <>
+                "Mandatory cognitive lineage."
           },
           "scope" => %{
             "type" => "string",
@@ -253,10 +284,14 @@ defmodule CqrMcp.Tools do
             "type" => "string",
             "description" =>
               "Optional typed relationships to existing entities, as a comma-separated list. " <>
-                "Each relationship uses the shorthand REL:entity:ns:name:strength, e.g. " <>
-                "'CORRELATES_WITH:entity:product:nps:0.7,DEPENDS_ON:entity:finance:arr:0.5'. " <>
-                "Valid relationship types: CORRELATES_WITH, CONTRIBUTES_TO, DEPENDS_ON, " <>
-                "CAUSES, PART_OF."
+                "Each relationship uses the shorthand REL:<entity_address>:strength. The " <>
+                "entity address may be hierarchical at any depth, e.g. " <>
+                "'CORRELATES_WITH:entity:product:nps:0.7' (3-segment target) or " <>
+                "'DEPENDS_ON:entity:product:retention:cohort:q4:0.6' (5-segment target). " <>
+                "Strength is the trailing decimal in [0.0, 1.0]; the parser splits on " <>
+                "the final colon so any number of preceding segments are treated as the " <>
+                "target address. Valid relationship types: CORRELATES_WITH, CONTRIBUTES_TO, " <>
+                "DEPENDS_ON, CAUSES, PART_OF."
           }
         },
         "required" => ["entity", "type", "description", "intent", "derived_from"]
@@ -319,7 +354,11 @@ defmodule CqrMcp.Tools do
         "properties" => %{
           "entity" => %{
             "type" => "string",
-            "description" => "Entity to trace (entity:namespace:name)"
+            "description" =>
+              "Entity to trace. Hierarchical addresses are supported at any depth, e.g. " <>
+                "entity:finance:arr (3 segments) or " <>
+                "entity:product:retention:cohort:q4 (5 segments). The provenance walk " <>
+                "starts from the leaf and follows DERIVED_FROM regardless of depth."
           },
           "depth" => %{
             "type" => "integer",
@@ -352,7 +391,12 @@ defmodule CqrMcp.Tools do
         "properties" => %{
           "entity" => %{
             "type" => "string",
-            "description" => "Entity to signal (entity:namespace:name)"
+            "description" =>
+              "Entity to signal. Hierarchical addresses at any depth, e.g. " <>
+                "entity:product:nps or entity:product:retention:cohort:q4. " <>
+                "Containment-aware visibility applies: if any ancestor in the " <>
+                "address is outside the agent's visible scopes the call returns " <>
+                "entity_not_found, never scope_access."
           },
           "score" => %{
             "type" => "number",
@@ -449,7 +493,10 @@ defmodule CqrMcp.Tools do
         "properties" => %{
           "entity" => %{
             "type" => "string",
-            "description" => "Entity being hypothesized about (entity:namespace:name)"
+            "description" =>
+              "Entity being hypothesized about. Hierarchical addresses at any depth, " <>
+                "e.g. entity:product:churn_rate or " <>
+                "entity:product:retention:cohort:q4."
           },
           "reputation" => %{
             "type" => "number",
@@ -491,8 +538,10 @@ defmodule CqrMcp.Tools do
           "entities" => %{
             "type" => "string",
             "description" =>
-              "Comma-separated entity references to compare " <>
-                "(entity:ns:a,entity:ns:b[,entity:ns:c,...]). At least two required."
+              "Comma-separated entity references to compare. Each may be hierarchical at " <>
+                "any depth, e.g. " <>
+                "'entity:finance:arr,entity:product:retention:cohort:q4'. At least two " <>
+                "required."
           },
           "include" => %{
             "type" => "string",
@@ -521,9 +570,10 @@ defmodule CqrMcp.Tools do
           "entities" => %{
             "type" => "string",
             "description" =>
-              "Comma-separated list of entity references forming the reasoning chain, " <>
-                "e.g. 'entity:finance:arr,entity:product:churn_rate'. At least one entity " <>
-                "is required; most useful with two or more."
+              "Comma-separated list of entity references forming the reasoning chain. " <>
+                "Each may be hierarchical at any depth, e.g. " <>
+                "'entity:finance:arr,entity:product:retention:cohort:q4'. At least one " <>
+                "entity is required; most useful with two or more."
           },
           "rationale" => %{
             "type" => "string",
@@ -567,7 +617,11 @@ defmodule CqrMcp.Tools do
         "properties" => %{
           "entity" => %{
             "type" => "string",
-            "description" => "Entity to update (entity:namespace:name)"
+            "description" =>
+              "Entity to update. Hierarchical addresses at any depth, e.g. " <>
+                "entity:product:churn_rate or " <>
+                "entity:product:retention:cohort:q4. The address is preserved across " <>
+                "the update -- UPDATE evolves content, not identity, regardless of depth."
           },
           "change_type" => %{
             "type" => "string",
@@ -613,7 +667,12 @@ defmodule CqrMcp.Tools do
         "properties" => %{
           "entity" => %{
             "type" => "string",
-            "description" => "Entity to certify (entity:namespace:name)"
+            "description" =>
+              "Entity to certify. Hierarchical addresses at any depth, e.g. " <>
+                "entity:finance:arr or " <>
+                "entity:product:retention:cohort:q4. Containment-aware visibility " <>
+                "applies: a CERTIFY against an address whose ancestor is outside the " <>
+                "agent's visible scopes returns entity_not_found, never scope_access."
           },
           "status" => %{
             "type" => "string",
@@ -868,8 +927,17 @@ defmodule CqrMcp.Tools do
   end
 
   defp parse_one_relationship(entry) do
+    # Format: REL:entity:seg1:seg2(:segN)*:strength
+    # Hierarchical targets are supported: the final segment is the strength,
+    # the second segment is the literal "entity", and everything between is
+    # the entity path (last path segment is the leaf name; preceding segments
+    # form the namespace path joined by ":").
     case String.split(entry, ":") do
-      [rel, "entity", ns, name, strength_str] ->
+      [rel, "entity" | rest] when length(rest) >= 2 ->
+        {path_segments, [strength_str]} = Enum.split(rest, -1)
+        {ns_segments, [name]} = Enum.split(path_segments, -1)
+        ns = Enum.join(ns_segments, ":")
+
         with true <- rel in @valid_relationship_types,
              {strength, ""} <- Float.parse(strength_str),
              true <- strength >= 0.0 and strength <= 1.0 do
@@ -897,7 +965,8 @@ defmodule CqrMcp.Tools do
         {:error,
          %{
            "code" => -32_602,
-           "message" => "Invalid relationship '#{entry}': expected REL:entity:ns:name:strength"
+           "message" =>
+             "Invalid relationship '#{entry}': expected REL:entity:ns:name(:segN)*:strength"
          }}
     end
   end

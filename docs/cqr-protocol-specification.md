@@ -135,7 +135,8 @@ CQR operates over a small, well-defined set of types. Constraining the type syst
 
 | Type | Syntax | Description |
 |------|--------|-------------|
-| Entity | `entity:<namespace>:<name>` | A named concept in the semantic repository. Namespaced to prevent collisions across domains. |
+| Entity | `entity:<segment>:<segment>(:<segment>)*` | A named concept in the semantic repository. Addresses are hierarchical with unlimited depth — `entity:finance:arr` (3 segments), `entity:product:retention:cohort:q4` (5 segments), and deeper. The leaf is the entity name; every preceding segment after `entity:` is the namespace path. Interior segments are auto-created as container entities and linked by `CONTAINS` edges; scope is enforced at every level of the path during resolution. |
+| Entity Prefix | `entity:<segment>(:<segment>)*:*` | A hierarchical prefix used by DISCOVER's prefix mode (Section 5, DISCOVER). The trailing `:*` is the literal sentinel that switches DISCOVER from neighborhood scan to depth-first `CONTAINS` enumeration. |
 | Scope | `scope:<segment>[:<segment>]` | An organizational boundary that defines visibility, authority, and access control. Scopes form a hierarchy. |
 | Duration | `<number><unit>` | A time span. Units: m (minutes), h (hours), d (days), w (weeks). |
 | Score | `<decimal>` | A 0.0–1.0 value for reputation thresholds and strength scores. |
@@ -238,6 +239,12 @@ DISCOVER concepts
 | DIRECTION | No | both | Edge traversal direction |
 | ANNOTATE | No | freshness, reputation | Metadata annotations |
 | LIMIT | No | No limit | Maximum results |
+
+**Prefix mode (`entity:<segment>(:<segment>)*:*`).** When the `RELATED TO` target ends in the literal `:*` sentinel, DISCOVER switches from typed-relationship neighborhood scan to hierarchical prefix enumeration. The engine performs a depth-first traversal of `CONTAINS` edges starting at the address before the `:*` and returns every visible descendant entity. Branch-level scope pruning omits any subtree whose root the agent cannot see and does not descend into it, so a blocked subtree is structurally indistinguishable from a missing one. `WITHIN`, `DEPTH`, `DIRECTION`, and `LIMIT` clauses are accepted for syntactic uniformity but the prefix walk is bounded by the containment graph itself rather than by an explicit depth.
+
+```
+DISCOVER concepts RELATED TO entity:product:retention:*
+```
 
 **Direction semantics:** Edges are stored once, directionally. The relationship type always reads in its original stored direction (e.g., CONTRIBUTES_TO always means source contributes to target). The `direction` parameter controls which edges are traversed:
 
@@ -730,6 +737,14 @@ This returns all active Teipsum Agents (personal agents, filtered by `role:twin`
 ### Hierarchical Scope Tree
 
 Scopes form a tree: `scope:company` → `scope:company:finance`, `scope:company:product`, `scope:company:engineering`, etc. Scope determines what context is visible and who can govern it.
+
+### Hierarchical Containment and Scope
+
+Entity addresses are themselves hierarchical (Section 4) and the engine treats a deep address as a path through container entities, not just a flat key. When an agent asserts `entity:product:retention:cohort:q4:weekly`, the engine creates whichever interior containers are missing (`retention`, `cohort`, `q4` if they do not yet exist), writes a `CONTAINS` edge from each parent to its child, and assigns each container the asserting agent's active scope. Container scopes do **not** widen with depth — every auto-created node lives in the asserting agent's scope.
+
+For every read or write that names a hierarchical address, scope authorization is checked at every node from root to leaf. **A denial at any ancestor returns `entity_not_found`, never `scope_access`** — agents cannot infer the existence or shape of subtrees in scopes they cannot see. This applies uniformly to RESOLVE, DISCOVER (anchor and prefix modes), ASSERT (target validation in `DERIVED_FROM` and `RELATIONSHIPS`), CERTIFY, SIGNAL, TRACE, and UPDATE. The same rule governs DISCOVER prefix mode's branch pruning: a subtree whose root the agent cannot see is omitted entirely, and the prefix walk does not descend into it.
+
+After every ASSERT the engine runs a post-write integrity check verifying that the leaf's full `CONTAINS` chain back to the root is intact and that every interior container exists. A failed check rolls the assertion back rather than leaving the graph in a partial state.
 
 ### Bidirectional Visibility
 
