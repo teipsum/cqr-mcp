@@ -30,8 +30,39 @@ defmodule Cqr.Repo.Semantic do
   @doc """
   Get an entity by namespace and name, optionally filtered to visible scopes.
   Returns `{:ok, entity_map}` or `{:error, :not_found}`.
+
+  When `visible_scope_paths` is a list, the containment path is walked:
+  every ancestor on the hierarchical address (implied by the namespace
+  segments) must also sit in a visible scope. A denial at any level is
+  reported as `:not_visible` so the response is indistinguishable from
+  a nonexistent entity — leaking existence up the chain would defeat
+  scope isolation.
   """
-  def get_entity({ns, name}, visible_scope_paths \\ nil) do
+  def get_entity(entity, visible_scope_paths \\ nil)
+
+  def get_entity({ns, name}, nil) do
+    fetch_entity_rows(ns, name)
+  end
+
+  def get_entity({ns, name} = entity, visible_scope_paths) when is_list(visible_scope_paths) do
+    with :ok <- verify_containment_path(entity, visible_scope_paths),
+         {:ok, data} <- fetch_entity_rows(ns, name) do
+      enforce_leaf_scope(data, visible_scope_paths)
+    end
+  end
+
+  defp enforce_leaf_scope(data, visible_scope_paths) do
+    visible_keys = Enum.map(visible_scope_paths, &Enum.join(&1, ":"))
+    entity_keys = Enum.map(data.scopes, &Enum.join(&1, ":"))
+
+    if Enum.any?(entity_keys, &(&1 in visible_keys)) do
+      {:ok, data}
+    else
+      {:error, :not_visible}
+    end
+  end
+
+  defp fetch_entity_rows(ns, name) do
     case GrafeoServer.query(
            "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>
              "-[:IN_SCOPE]->(s:Scope) " <>
@@ -39,16 +70,71 @@ defmodule Cqr.Repo.Semantic do
              "e.reputation, e.freshness_hours_ago, e.certified, " <>
              "e.certified_by, e.certified_at, e.certification_status, s.path"
          ) do
-      {:ok, []} ->
-        {:error, :not_found}
+      {:ok, []} -> {:error, :not_found}
+      {:ok, rows} -> {:ok, build_entity(rows)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
+  @doc """
+  Walk the containment path for a hierarchical entity address and verify
+  the requesting agent has scope authorization at every level.
+
+  The ancestor chain is derived from the namespace segments — for the
+  address `entity:a:b:c` (ns=`a:b`, name=`c`) the path is
+  `{"a", "b"}` followed by `{"a:b", "c"}`. A depth-2 entity (`ns` with
+  a single segment) has no ancestors, so the walk only checks the leaf
+  through the regular scope filter.
+
+  Returns `:ok` if every level is in a visible scope, `{:error, :not_visible}`
+  the moment any level is missing or blocked. A missing ancestor is
+  treated as not-visible rather than not-found so an agent cannot infer
+  the existence of intermediate containers they lack access to.
+  """
+  def verify_containment_path({ns, _name}, visible_scope_paths)
+      when is_list(visible_scope_paths) do
+    visible_keys = Enum.map(visible_scope_paths, &Enum.join(&1, ":"))
+
+    ns
+    |> ancestor_entities()
+    |> Enum.reduce_while(:ok, fn ancestor, _ ->
+      case entity_visible_in_keys(ancestor, visible_keys) do
+        :ok -> {:cont, :ok}
+        other -> {:halt, other}
+      end
+    end)
+  end
+
+  defp ancestor_entities(ns) do
+    segments = String.split(ns, ":")
+
+    case segments do
+      [_] ->
+        []
+
+      [] ->
+        []
+
+      _ ->
+        n = length(segments)
+
+        Enum.map(1..(n - 1), fn i ->
+          ancestor_ns = segments |> Enum.take(i) |> Enum.join(":")
+          name = Enum.at(segments, i)
+          {ancestor_ns, name}
+        end)
+    end
+  end
+
+  defp entity_visible_in_keys({ns, name}, visible_keys) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>
+        "-[:IN_SCOPE]->(s:Scope) RETURN s.path"
+
+    case GrafeoServer.query(query) do
       {:ok, rows} ->
-        rows = maybe_filter_by_scope(rows, visible_scope_paths)
-
-        case rows do
-          [] -> {:error, :not_visible}
-          _ -> {:ok, build_entity(rows)}
-        end
+        paths = rows |> Enum.map(& &1["s.path"]) |> Enum.uniq()
+        if Enum.any?(paths, &(&1 in visible_keys)), do: :ok, else: {:error, :not_visible}
 
       {:error, reason} ->
         {:error, reason}

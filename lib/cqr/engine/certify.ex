@@ -78,8 +78,8 @@ defmodule Cqr.Engine.Certify do
 
       {:error, :not_visible} ->
         {:error,
-         Cqr.Error.scope_access(Cqr.Types.format_entity(entity),
-           suggestions: Enum.map(visible, &Cqr.Types.format_scope/1)
+         Cqr.Error.entity_not_found(Cqr.Types.format_entity(entity),
+           similar: Semantic.search_entities(elem(entity, 1), visible)
          )}
 
       {:error, reason} ->
