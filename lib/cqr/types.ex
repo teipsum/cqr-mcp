@@ -11,13 +11,22 @@ defmodule Cqr.Types do
   @doc """
   Validates an entity tuple `{namespace, name}`.
 
-  Both namespace and name must be non-empty strings matching `[a-z_][a-z0-9_]*`.
+  Namespace is a colon-joined path of one or more identifier segments
+  (e.g. `"agent"` or `"twin:michael:health"`); name is a single identifier.
+  Each segment must match `[a-z_][a-z0-9_]*`.
   """
   def valid_entity?({ns, name}) when is_binary(ns) and is_binary(name) do
-    valid_identifier?(ns) and valid_identifier?(name)
+    valid_namespace_path?(ns) and valid_identifier?(name)
   end
 
   def valid_entity?(_), do: false
+
+  defp valid_namespace_path?(ns) do
+    case String.split(ns, ":") do
+      [] -> false
+      segments -> Enum.all?(segments, &valid_identifier?/1)
+    end
+  end
 
   @doc "Formats an entity tuple as `entity:namespace:name`."
   def format_entity({ns, name}), do: "entity:#{ns}:#{name}"

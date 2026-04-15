@@ -139,4 +139,54 @@ defmodule Cqr.ParserTest do
       assert result.related_to == {:search, "Q4 2025 performance & growth"}
     end
   end
+
+  describe "parse/1 — hierarchical entity addresses" do
+    test "parses 3-segment entity address" do
+      {:ok, result} = Parser.parse("RESOLVE entity:agent:default:orientation")
+      assert result.entity == {"agent:default", "orientation"}
+    end
+
+    test "parses 4-segment entity address" do
+      {:ok, result} = Parser.parse("RESOLVE entity:agent:patent_agent:group:a")
+      assert result.entity == {"agent:patent_agent:group", "a"}
+    end
+
+    test "parses 5-segment entity address" do
+      {:ok, result} =
+        Parser.parse("RESOLVE entity:twin:michael:health:cardiology:heart_rate")
+
+      assert result.entity == {"twin:michael:health:cardiology", "heart_rate"}
+    end
+
+    test "hierarchical entity works in RESOLVE" do
+      {:ok, %Cqr.Resolve{} = result} =
+        Parser.parse("RESOLVE entity:agent:default:orientation")
+
+      assert result.entity == {"agent:default", "orientation"}
+    end
+
+    test "hierarchical entity works in ASSERT" do
+      {:ok, %Cqr.Assert{} = result} =
+        Parser.parse(
+          ~s(ASSERT entity:product:uqr:cognitive:preamble TYPE definition DESCRIPTION "test")
+        )
+
+      assert result.entity == {"product:uqr:cognitive", "preamble"}
+    end
+
+    test "trailing colon is malformed" do
+      assert {:error, %Cqr.Error{code: :parse_error}} =
+               Parser.parse("RESOLVE entity:agent:default:")
+    end
+
+    test "empty segment (double colon) is malformed" do
+      assert {:error, %Cqr.Error{code: :parse_error}} =
+               Parser.parse("RESOLVE entity:agent::name")
+    end
+
+    test "two-segment entity still yields scalar namespace" do
+      {:ok, result} = Parser.parse("RESOLVE entity:finance:arr")
+      assert result.entity == {"finance", "arr"}
+    end
+  end
 end
