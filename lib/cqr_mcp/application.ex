@@ -45,24 +45,38 @@ defmodule CqrMcp.Application do
   # Persistent (--persist [path]): does not seed unless --reset is passed.
   # Persistent + --reset: deletes DB file, opens fresh, seeds sample data.
   defp parse_storage_args(argv) do
+    # Allow override via Application.get_env for embedding in umbrella apps
+    case Application.get_env(:cqr_mcp, :grafeo_path) do
+      path when is_binary(path) ->
+        reset = "--reset" in argv
+        {{:path, path}, Application.get_env(:cqr_mcp, :grafeo_seed, true), reset}
+
+      _ ->
+        parse_argv_storage(argv)
+    end
+  end
+
+  defp parse_argv_storage(argv) do
     if "--persist" in argv do
-      path =
-        argv
-        |> Enum.drop_while(&(&1 != "--persist"))
-        |> Enum.drop(1)
-        |> Enum.at(0)
-
-      path =
-        if is_binary(path) and not String.starts_with?(path, "--") do
-          path
-        else
-          default_db_path()
-        end
-
+      path = persist_path(argv)
       reset = "--reset" in argv
       {{:path, path}, reset, reset}
     else
       {:memory, true, false}
+    end
+  end
+
+  defp persist_path(argv) do
+    candidate =
+      argv
+      |> Enum.drop_while(&(&1 != "--persist"))
+      |> Enum.drop(1)
+      |> Enum.at(0)
+
+    if is_binary(candidate) and not String.starts_with?(candidate, "--") do
+      candidate
+    else
+      default_db_path()
     end
   end
 

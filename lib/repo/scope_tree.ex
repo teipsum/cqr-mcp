@@ -41,6 +41,25 @@ defmodule Cqr.Repo.ScopeTree do
   end
 
   @doc """
+  Return all root scope paths as segment lists.
+
+  A root scope is a level-0 `Scope` node — i.e. one with no `CHILD_OF`
+  parent edge. For a seed with a single `scope:acme_retail` root this
+  returns `[["acme_retail"]]`.
+  """
+  def root_scopes do
+    :ets.foldl(
+      fn
+        {{:scope, path}, %{level: 0}}, acc -> [String.split(path, ":") | acc]
+        _, acc -> acc
+      end,
+      [],
+      @table
+    )
+    |> Enum.sort()
+  end
+
+  @doc """
   Return all scopes visible from the given scope.
 
   Visibility is bidirectional along the hierarchy:

@@ -174,6 +174,40 @@ Single OS process. Elixir/OTP application with Grafeo (pure-Rust graph DB) embed
 
 Deeper detail in [`docs/architecture.md`](docs/architecture.md).
 
+## Hierarchical Entity Addressing
+
+Entity addresses are hierarchical with unlimited depth. Every primitive that accepts an entity reference accepts a path of arbitrary length:
+
+```
+entity:finance:arr                                 # 3 segments — flat ns:name
+entity:product:retention:cohort                    # 4 segments
+entity:product:retention:cohort:q4                 # 5 segments
+entity:product:retention:cohort:q4:weekly:p95      # 7 segments — no upper bound
+```
+
+The leaf segment is the entity name; every preceding segment after `entity:` is part of the namespace path.
+
+**Container auto-creation.** When an agent asserts a deep address, the engine creates each interior segment as a container entity on demand and writes a `CONTAINS` edge from each parent to its child. Asserting `entity:product:retention:cohort:q4:weekly` against an empty graph creates four entities (`retention`, `cohort`, `q4`, `weekly`) plus the four `CONTAINS` edges between them, all in the asserting agent's scope. Subsequent asserts under the same prefix reuse the containers — they are created idempotently.
+
+**Scope governance at containment depth.** Scope is enforced at every level of the path, not just the leaf. When an agent RESOLVEs, SIGNALs, CERTIFies, TRACEs, UPDATEs, or otherwise references a hierarchical address, the engine walks the containment chain from root to leaf and checks scope authorization at every node. **A denial at any level returns `entity_not_found`, never `scope_access`** — the agent cannot infer the existence or shape of subtrees in scopes it cannot see. Containers inherit the scope of the asserting agent on creation, so a `scope:company:product` agent that asserts a deep entity puts every auto-created ancestor in `scope:company:product` as well; a `scope:company:finance` agent can never see any of it.
+
+**DISCOVER prefix mode.** A `DISCOVER` topic ending in `:*` switches to hierarchical prefix enumeration: depth-first traversal following `CONTAINS` edges from the anchor downward, returning every visible descendant. Branch-level scope pruning omits any subtree whose root the agent cannot see, **and does not descend into it** — so a blocked subtree is structurally indistinguishable from a missing one.
+
+```bash
+# Anchor mode — typed-relationship neighborhood (default)
+cqr_discover { "topic": "entity:product:churn_rate", "depth": 2 }
+
+# Prefix mode — every entity contained under the address
+cqr_discover { "topic": "entity:product:retention:*" }
+
+# Free-text mode — BM25 + HNSW within visible scope
+cqr_discover { "topic": "churn velocity" }
+```
+
+Free-text mode and entity-anchor mode are unchanged — the `:*` suffix is the only switch.
+
+After every ASSERT the engine runs a post-write integrity check: it verifies that every interior container exists, that the `CONTAINS` chain is unbroken from root to leaf, and that the leaf entity is reachable via the chain. A failed integrity check rolls the assertion back rather than leaving the graph in a partial state.
+
 ## Governance Model
 
 - **Hierarchical scopes.** Scopes form a tree: `scope:company → scope:company:product → scope:company:product:mobile`. Every entity lives in one or more scopes.
