@@ -76,7 +76,161 @@ defmodule Cqr.Adapter.Grafeo do
 
       {:search, term} ->
         search_discover(term, visible, expression)
+
+      {:prefix, segments} ->
+        prefix_discover(segments, visible, expression)
     end
+  end
+
+  # --- DISCOVER: prefix mode ---
+  #
+  # `entity:ns:name:*` requests every descendant of the anchor entity
+  # reachable via CONTAINS edges. The traversal is depth-first with
+  # branch-level scope pruning: a node outside the agent's visible scope
+  # set is not returned AND its subtree is not descended, so the agent
+  # cannot infer the shape of the hidden containment subtree. An anchor
+  # that is itself invisible returns an empty result, indistinguishable
+  # from a nonexistent anchor.
+  defp prefix_discover(segments, visible, expression) do
+    case segments_to_entity(segments) do
+      nil ->
+        {:ok, empty_prefix_result(segments)}
+
+      anchor ->
+        rows = collect_prefix_rows(anchor, visible)
+        limited = maybe_limit(rows, expression.limit)
+        {:ok, build_prefix_result(limited, segments)}
+    end
+  end
+
+  defp collect_prefix_rows(anchor, visible) do
+    visible_keys = Enum.map(visible, &Enum.join(&1, ":"))
+
+    with :ok <- Semantic.verify_containment_path(anchor, visible),
+         {:ok, anchor_row} when not is_nil(anchor_row) <-
+           fetch_entity_row_for_prefix(anchor, visible_keys) do
+      descendants = enumerate_prefix_descendants([anchor], visible_keys, [])
+      [anchor_row | descendants]
+    else
+      _ -> []
+    end
+  end
+
+  defp segments_to_entity(segments) when is_list(segments) do
+    case Enum.split(segments, -1) do
+      {[], _} -> nil
+      {ns_segments, [name]} -> {Enum.join(ns_segments, ":"), name}
+    end
+  end
+
+  defp enumerate_prefix_descendants([], _visible_keys, acc), do: Enum.reverse(acc)
+
+  defp enumerate_prefix_descendants([parent | rest], visible_keys, acc) do
+    case fetch_contained_children(parent) do
+      {:ok, children} ->
+        {visible_rows, next_frontier} = partition_children(children, visible_keys)
+
+        enumerate_prefix_descendants(
+          next_frontier ++ rest,
+          visible_keys,
+          Enum.reverse(visible_rows) ++ acc
+        )
+
+      {:error, _} ->
+        enumerate_prefix_descendants(rest, visible_keys, acc)
+    end
+  end
+
+  defp partition_children(children, visible_keys) do
+    Enum.reduce(children, {[], []}, fn {entity, row, scope_paths}, {rows_acc, next_acc} ->
+      if Enum.any?(scope_paths, &(&1 in visible_keys)) do
+        {[row | rows_acc], next_acc ++ [entity]}
+      else
+        # Prune: omit this node and its subtree entirely.
+        {rows_acc, next_acc}
+      end
+    end)
+  end
+
+  defp fetch_contained_children({ns, name}) do
+    query =
+      "MATCH (p:Entity {namespace: '#{ns}', name: '#{name}'})-[:CONTAINS]->(c:Entity)" <>
+        "-[:IN_SCOPE]->(s:Scope) " <>
+        "RETURN c.namespace, c.name, c.type, c.description, c.owner, " <>
+        "c.reputation, c.certified, s.path"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        grouped =
+          rows
+          |> Enum.group_by(fn r -> {r["c.namespace"], r["c.name"]} end)
+          |> Enum.map(fn {{ns_c, name_c}, group_rows} ->
+            first = hd(group_rows)
+            paths = group_rows |> Enum.map(& &1["s.path"]) |> Enum.uniq()
+            row = build_prefix_row(first, "c", paths)
+            {{ns_c, name_c}, row, paths}
+          end)
+
+        {:ok, grouped}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_entity_row_for_prefix({ns, name}, visible_keys) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})-[:IN_SCOPE]->(s:Scope) " <>
+        "RETURN e.namespace, e.name, e.type, e.description, e.owner, " <>
+        "e.reputation, e.certified, s.path"
+
+    case GrafeoServer.query(query) do
+      {:ok, []} ->
+        {:ok, nil}
+
+      {:ok, rows} ->
+        paths = rows |> Enum.map(& &1["s.path"]) |> Enum.uniq()
+
+        if Enum.any?(paths, &(&1 in visible_keys)) do
+          {:ok, build_prefix_row(hd(rows), "e", paths)}
+        else
+          {:ok, nil}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp build_prefix_row(row, alias_prefix, scope_paths) do
+    %{
+      entity: {row["#{alias_prefix}.namespace"], row["#{alias_prefix}.name"]},
+      namespace: row["#{alias_prefix}.namespace"],
+      name: row["#{alias_prefix}.name"],
+      type: row["#{alias_prefix}.type"],
+      description: row["#{alias_prefix}.description"],
+      owner: row["#{alias_prefix}.owner"],
+      reputation: row["#{alias_prefix}.reputation"],
+      certified: row["#{alias_prefix}.certified"],
+      scopes: Enum.map(scope_paths, fn path -> String.split(path, ":") end),
+      source: "prefix"
+    }
+  end
+
+  defp build_prefix_result(rows, segments) do
+    %Cqr.Result{
+      data: rows,
+      sources: ["grafeo"],
+      quality: %Cqr.Quality{
+        provenance:
+          "DISCOVER prefix enumeration for entity:#{Enum.join(segments, ":")}:* " <>
+            "(#{length(rows)} visible)"
+      }
+    }
+  end
+
+  defp empty_prefix_result(segments) do
+    build_prefix_result([], segments)
   end
 
   # Dispatch to the right semantic query (or both) based on the requested
@@ -2286,8 +2440,12 @@ defmodule Cqr.Adapter.Grafeo do
     }
   end
 
+  # Both :not_found and :not_visible collapse to the same "not_found" reason
+  # so a chain agent cannot distinguish a nonexistent entity from one blocked
+  # by containment-aware scope visibility. Containment denial must be
+  # indistinguishable from non-existence (see Cqr.Repo.Semantic.get_entity/2).
   defp missing_reason(:not_found), do: "not_found"
-  defp missing_reason(:not_visible), do: "not_visible"
+  defp missing_reason(:not_visible), do: "not_found"
   defp missing_reason({:adapter_error, reason}), do: "adapter_error: #{inspect(reason)}"
 
   defp build_recommendations(missing, uncertified, stale, below_reputation) do

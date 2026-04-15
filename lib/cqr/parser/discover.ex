@@ -19,6 +19,7 @@ defmodule Cqr.Parser.Discover do
     |> ignore(Terminals.sp())
     |> concat(
       choice([
+        Terminals.entity_prefix() |> map({__MODULE__, :tag_prefix, []}),
         Terminals.entity() |> map({__MODULE__, :tag_entity, []}),
         Terminals.string_literal() |> map({__MODULE__, :tag_search, []})
       ])
@@ -28,6 +29,7 @@ defmodule Cqr.Parser.Discover do
 
   def tag_entity(entity), do: {:entity, entity}
   def tag_search(text), do: {:search, text}
+  def tag_prefix(segments), do: {:prefix, segments}
 
   def within_clause do
     ignore(string("WITHIN"))

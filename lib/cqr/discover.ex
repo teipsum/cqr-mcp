@@ -29,7 +29,10 @@ defmodule Cqr.Discover do
   @type direction :: :outbound | :inbound | :both
 
   @type t :: %__MODULE__{
-          related_to: {:entity, {String.t(), String.t()}} | {:search, String.t()},
+          related_to:
+            {:entity, {String.t(), String.t()}}
+            | {:search, String.t()}
+            | {:prefix, [String.t()]},
           within: [[String.t()]] | nil,
           depth: pos_integer() | nil,
           annotate: [atom()] | nil,

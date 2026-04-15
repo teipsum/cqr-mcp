@@ -56,6 +56,26 @@ defmodule Cqr.Parser.Terminals do
     {Enum.join(ns_segments, ":"), name}
   end
 
+  # --- Entity prefix: entity:seg1(:seg2)*:* ---
+  #
+  # Used by DISCOVER's prefix mode to enumerate every entity contained under
+  # a given address. The trailing `:*` is the literal sentinel that triggers
+  # hierarchical prefix enumeration (as opposed to a single-entity RELATED TO
+  # anchor). Reduced to a list of segment strings — the caller decides
+  # whether to treat the list as an anchor entity address or a prefix.
+
+  def entity_prefix do
+    string("entity:")
+    |> ignore()
+    |> concat(identifier())
+    |> times(ignore(string(":")) |> concat(identifier()), min: 1)
+    |> ignore(string(":*"))
+    |> reduce({__MODULE__, :to_prefix_segments, []})
+    |> label("entity prefix reference (entity:ns:name:*)")
+  end
+
+  def to_prefix_segments(segments) when is_list(segments), do: segments
+
   # --- Scope: scope:seg1:seg2:... ---
 
   def scope do

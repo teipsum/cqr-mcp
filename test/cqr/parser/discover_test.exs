@@ -24,6 +24,27 @@ defmodule Cqr.Parser.DiscoverTest do
 
       assert result.related_to == {:search, ""}
     end
+
+    test "entity prefix (hierarchical enumeration sentinel)" do
+      {:ok, result} =
+        Parser.parse("DISCOVER concepts RELATED TO entity:agent:patent_agent:*")
+
+      assert result.related_to == {:prefix, ["agent", "patent_agent"]}
+    end
+
+    test "deep entity prefix" do
+      {:ok, result} =
+        Parser.parse("DISCOVER concepts RELATED TO entity:agent:patent_agent:group:sub:*")
+
+      assert result.related_to == {:prefix, ["agent", "patent_agent", "group", "sub"]}
+    end
+
+    test "entity reference without trailing :* is NOT treated as a prefix" do
+      {:ok, result} =
+        Parser.parse("DISCOVER concepts RELATED TO entity:agent:patent_agent")
+
+      assert result.related_to == {:entity, {"agent", "patent_agent"}}
+    end
   end
 
   describe "DISCOVER — WITHIN clause" do

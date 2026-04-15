@@ -15,6 +15,20 @@ defmodule Cqr.Parser.AssertTest do
       assert ast.derived_from == [{"product", "churn_rate"}, {"finance", "arr"}]
       assert ast.relationships == nil
     end
+
+    test "parses DERIVED_FROM with hierarchical entity addresses" do
+      expr =
+        ~s(ASSERT entity:insights:x TYPE observation DESCRIPTION "x" INTENT "y" ) <>
+          ~s(DERIVED_FROM entity:agent:default:orientation,) <>
+          ~s(entity:governance:relationship_guide)
+
+      assert {:ok, %Cqr.Assert{derived_from: sources}} = Parser.parse(expr)
+
+      assert sources == [
+               {"agent:default", "orientation"},
+               {"governance", "relationship_guide"}
+             ]
+    end
   end
 
   describe "ASSERT with RELATIONSHIPS" do
@@ -72,6 +86,37 @@ defmodule Cqr.Parser.AssertTest do
       assert {:ok, %Cqr.Assert{relationships: [%{strength: strength}]}} = Parser.parse(expr)
       assert is_float(strength)
       assert strength == 0.33
+    end
+
+    test "parses a hierarchical entity address in a relationship target" do
+      expr = @base <> " RELATIONSHIPS DEPENDS_ON:entity:agent:default:orientation:0.9"
+
+      assert {:ok, %Cqr.Assert{relationships: [rel]}} = Parser.parse(expr)
+      assert rel.type == "DEPENDS_ON"
+      assert rel.target == {"agent:default", "orientation"}
+      assert rel.strength == 0.9
+    end
+
+    test "parses multiple hierarchical relationship targets" do
+      expr =
+        @base <>
+          " RELATIONSHIPS CONTRIBUTES_TO:entity:agent:patent_agent:legal:0.7," <>
+          "DEPENDS_ON:entity:governance:relationship_guide:0.5"
+
+      assert {:ok, %Cqr.Assert{relationships: rels}} = Parser.parse(expr)
+
+      assert [
+               %{
+                 type: "CONTRIBUTES_TO",
+                 target: {"agent:patent_agent", "legal"},
+                 strength: 0.7
+               },
+               %{
+                 type: "DEPENDS_ON",
+                 target: {"governance", "relationship_guide"},
+                 strength: 0.5
+               }
+             ] = rels
     end
 
     test "RELATIONSHIPS can coexist with IN and CONFIDENCE in any order" do
