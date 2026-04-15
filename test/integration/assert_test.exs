@@ -315,4 +315,149 @@ defmodule Cqr.Integration.AssertTest do
                )
     end
   end
+
+  describe "hierarchical entity addressing" do
+    # Assert a hierarchical entity given a raw namespace path and leaf name.
+    # Intermediate containers are expected to be auto-created by the engine.
+    defp hierarchical_assert(ns_path, leaf_name, opts \\ []) do
+      derived =
+        Keyword.get(opts, :derived_from, ["entity:product:churn_rate"])
+        |> Enum.join(", ")
+
+      ~s(ASSERT entity:#{ns_path}:#{leaf_name} TYPE derived_metric ) <>
+        ~s(DESCRIPTION "Hierarchical assertion #{leaf_name}" ) <>
+        ~s(INTENT "Testing hierarchical ASSERT" ) <>
+        ~s(DERIVED_FROM #{derived})
+    end
+
+    test "depth-3 ASSERT with existing parent creates CONTAINS edge to leaf" do
+      parent_expr = minimal_assert("h_case12_parent")
+      assert {:ok, _} = Engine.execute(parent_expr, @product_context)
+
+      leaf_expr = hierarchical_assert("test_assert:h_case12_parent", "leaf")
+      assert {:ok, _} = Engine.execute(leaf_expr, @product_context)
+
+      # Parent must NOT become a container: it was asserted as a regular
+      # entity and remains so.
+      assert {:ok, [%{"e.type" => "derived_metric"}]} =
+               GrafeoServer.query(
+                 "MATCH (e:Entity {namespace: 'test_assert', name: 'h_case12_parent'}) " <>
+                   "RETURN e.type"
+               )
+
+      # CONTAINS edge from parent to leaf.
+      assert {:ok, [%{"c.name" => "leaf"}]} =
+               GrafeoServer.query(
+                 "MATCH (p:Entity {namespace: 'test_assert', name: 'h_case12_parent'})" <>
+                   "-[:CONTAINS]->(c:Entity) RETURN c.namespace, c.name"
+               )
+    end
+
+    test "depth-4 ASSERT with no existing intermediates auto-creates all containers" do
+      # No parents exist under namespace "h_case13_root"
+      leaf_expr = hierarchical_assert("h_case13_root:grp:sub", "leaf")
+      assert {:ok, _} = Engine.execute(leaf_expr, @product_context)
+
+      # Both intermediates were auto-created as containers.
+      assert Semantic.entity_exists?({"h_case13_root", "grp"})
+      assert Semantic.entity_exists?({"h_case13_root:grp", "sub"})
+
+      assert {:ok, [%{"e.type" => "container", "e.confidence" => 1.0}]} =
+               GrafeoServer.query(
+                 "MATCH (e:Entity {namespace: 'h_case13_root', name: 'grp'}) " <>
+                   "RETURN e.type, e.confidence"
+               )
+
+      assert {:ok, [%{"e.type" => "container", "e.description" => description}]} =
+               GrafeoServer.query(
+                 "MATCH (e:Entity {namespace: 'h_case13_root:grp', name: 'sub'}) " <>
+                   "RETURN e.type, e.description"
+               )
+
+      assert description == "Auto-created container for h_case13_root:grp:sub"
+    end
+
+    test "auto-created intermediates inherit IN_SCOPE from the walk seed" do
+      leaf_expr = hierarchical_assert("h_case14_root:mid", "leaf")
+      assert {:ok, _} = Engine.execute(leaf_expr, @product_context)
+
+      # All three nodes in the chain must carry IN_SCOPE -> scope:company:product.
+      for {ns, name} <- [
+            {"h_case14_root", "mid"},
+            {"h_case14_root:mid", "leaf"}
+          ] do
+        assert {:ok, rows} =
+                 GrafeoServer.query(
+                   "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>
+                     "-[:IN_SCOPE]->(s:Scope) RETURN s.path"
+                 )
+
+        paths = rows |> Enum.map(& &1["s.path"]) |> Enum.sort()
+        assert paths == ["company:product"]
+      end
+    end
+
+    test "depth-3 ASSERT writes CONTAINS edge from auto-container to leaf" do
+      leaf_expr = hierarchical_assert("h_case15_root:inner", "leaf")
+      assert {:ok, _} = Engine.execute(leaf_expr, @product_context)
+
+      assert {:ok, [%{"c.name" => "leaf", "c.namespace" => "h_case15_root:inner"}]} =
+               GrafeoServer.query(
+                 "MATCH (p:Entity {namespace: 'h_case15_root', name: 'inner'})" <>
+                   "-[:CONTAINS]->(c:Entity) RETURN c.namespace, c.name"
+               )
+    end
+
+    test "depth-4 ASSERT wires CONTAINS edges through every level" do
+      leaf_expr = hierarchical_assert("h_case16_root:mid:sub", "leaf")
+      assert {:ok, _} = Engine.execute(leaf_expr, @product_context)
+
+      # Level 1 container -> level 2 container.
+      assert {:ok, [%{"c.name" => "sub", "c.namespace" => "h_case16_root:mid"}]} =
+               GrafeoServer.query(
+                 "MATCH (p:Entity {namespace: 'h_case16_root', name: 'mid'})" <>
+                   "-[:CONTAINS]->(c:Entity) RETURN c.namespace, c.name"
+               )
+
+      # Level 2 container -> leaf.
+      assert {:ok, [%{"c.name" => "leaf", "c.namespace" => "h_case16_root:mid:sub"}]} =
+               GrafeoServer.query(
+                 "MATCH (p:Entity {namespace: 'h_case16_root:mid', name: 'sub'})" <>
+                   "-[:CONTAINS]->(c:Entity) RETURN c.namespace, c.name"
+               )
+    end
+
+    test "RESOLVE succeeds immediately after hierarchical ASSERT (post-assert integrity)" do
+      leaf_expr = hierarchical_assert("h_case17_root:mid", "leaf")
+      assert {:ok, _} = Engine.execute(leaf_expr, @product_context)
+
+      assert {:ok, result} =
+               Engine.execute(
+                 "RESOLVE entity:h_case17_root:mid:leaf",
+                 @product_context
+               )
+
+      assert [
+               %{
+                 namespace: "h_case17_root:mid",
+                 name: "leaf",
+                 type: "derived_metric",
+                 scopes: [["company", "product"]]
+               }
+             ] = result.data
+    end
+
+    test "depth-2 ASSERT (existing path) creates no CONTAINS edges" do
+      expr = minimal_assert("h_case18_flat")
+      assert {:ok, _} = Engine.execute(expr, @product_context)
+
+      # Entity is a leaf at depth 2 so nothing contains it and it contains
+      # nothing. Both directions are empty.
+      assert {:ok, []} =
+               GrafeoServer.query(
+                 "MATCH (e:Entity {namespace: 'test_assert', name: 'h_case18_flat'})" <>
+                   "-[:CONTAINS]-() RETURN e.name"
+               )
+    end
+  end
 end

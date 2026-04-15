@@ -348,20 +348,24 @@ defmodule Cqr.Adapter.Grafeo do
          :ok <- ensure_entity_absent(expression.entity),
          :ok <- ensure_derived_from_accessible(expression.derived_from, visible),
          :ok <- ensure_relationship_targets_accessible(relationships, visible),
+         {:ok, leaf_parent, leaf_scopes} <-
+           cascade_containers(expression.entity, target_scope, agent_id, visible),
          {:ok, record_id} <- generate_record_id(),
          :ok <- write_entity_node(expression, agent_id),
-         :ok <- write_in_scope_edge(expression.entity, target_scope),
+         :ok <- write_in_scope_edges_multi(expression.entity, leaf_scopes),
+         :ok <- maybe_write_contains_edge(leaf_parent, expression.entity),
          :ok <- write_derived_from_edges(expression, agent_id),
          :ok <- write_relationship_edges(expression.entity, relationships),
          :ok <- write_assertion_record(expression, agent_id, record_id, target_scope),
-         :ok <- write_asserted_by_edge(expression.entity, record_id) do
-      result = build_result(expression, agent_id, target_scope)
+         :ok <- write_asserted_by_edge(expression.entity, record_id),
+         :ok <- verify_assert_integrity(expression.entity) do
+      result = build_result(expression, agent_id, leaf_scopes)
       {:ok, result}
     else
       {:error, %Cqr.Error{} = err} ->
         # Best-effort cleanup if a write failed partway. Validation errors
         # fire before any writes so the rollback path only triggers on
-        # adapter system errors.
+        # adapter system errors or post-write integrity failures.
         cleanup_partial_assert(expression.entity)
         {:error, err}
     end
@@ -559,15 +563,29 @@ defmodule Cqr.Adapter.Grafeo do
     exec_write(query)
   end
 
-  defp write_in_scope_edge({ns, name}, scope_segments) do
+  defp write_in_scope_edge({ns, name}, scope_segments, primary) do
     scope_path = Enum.join(scope_segments, ":")
 
     query =
       "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}), " <>
         "(s:Scope {path: '#{scope_path}'}) " <>
-        "INSERT (e)-[:IN_SCOPE {primary: true}]->(s)"
+        "INSERT (e)-[:IN_SCOPE {primary: #{primary}}]->(s)"
 
     exec_write(query)
+  end
+
+  # Write multiple IN_SCOPE edges; the first scope is marked primary, the
+  # rest are non-primary. Used for entities that inherit multiple scopes
+  # from a parent container.
+  defp write_in_scope_edges_multi(entity, scopes) do
+    scopes
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {scope, idx}, _acc ->
+      case write_in_scope_edge(entity, scope, idx == 0) do
+        :ok -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
   end
 
   defp write_derived_from_edges(%Cqr.Assert{entity: {ns, name}} = expression, agent_id) do
@@ -648,7 +666,7 @@ defmodule Cqr.Adapter.Grafeo do
     exec_write(query)
   end
 
-  defp build_result(%Cqr.Assert{entity: {ns, name}} = expression, agent_id, target_scope) do
+  defp build_result(%Cqr.Assert{entity: {ns, name}} = expression, agent_id, leaf_scopes) do
     now = DateTime.utc_now()
     confidence = expression.confidence || 0.5
 
@@ -663,7 +681,7 @@ defmodule Cqr.Adapter.Grafeo do
       asserted_at: now,
       intent: expression.intent,
       derived_from: Enum.map(expression.derived_from, &Cqr.Types.format_entity/1),
-      scopes: [target_scope],
+      scopes: leaf_scopes,
       reputation: 0.5,
       owner: agent_id
     }
@@ -681,6 +699,247 @@ defmodule Cqr.Adapter.Grafeo do
         certified_at: nil
       }
     }
+  end
+
+  # --- ASSERT: hierarchical containment ---
+  #
+  # A hierarchical entity address like `entity:agent:patent_agent:group:a`
+  # implies a chain of parent entities (`agent:patent_agent:group`,
+  # `agent:patent_agent`). Intermediates that do not already exist are
+  # auto-created as container nodes so the CONTAINS traversal is
+  # well-defined end-to-end.
+  #
+  # Returns `{:ok, leaf_parent_or_nil, leaf_scopes}`:
+  #   * `leaf_parent_or_nil` — the immediate parent entity (for CONTAINS
+  #     edge to leaf) or `nil` for depth-2 root-level entities
+  #   * `leaf_scopes` — the scope segment lists to use for the leaf's
+  #     IN_SCOPE edges (inherited from the immediate parent when present,
+  #     or `[target_scope]` for depth-2 entities)
+  defp cascade_containers({ns, _name}, target_scope, agent_id, visible) do
+    ns_segments = String.split(ns, ":")
+
+    case ancestor_chain(ns_segments) do
+      [] ->
+        with :ok <- verify_scopes_visible([target_scope], visible) do
+          {:ok, nil, [target_scope]}
+        end
+
+      ancestors ->
+        walk_ancestors(ancestors, target_scope, agent_id, visible, nil)
+    end
+  end
+
+  # Build the chain of ancestor entities for a leaf, root-first.
+  # For ns_segments ["a", "b", "c"] (leaf ns = "a:b:c"), returns
+  # `[{"a", "b"}, {"a:b", "c"}]`.
+  defp ancestor_chain(ns_segments) when length(ns_segments) < 2, do: []
+
+  defp ancestor_chain(ns_segments) do
+    n = length(ns_segments)
+
+    Enum.map(1..(n - 1), fn i ->
+      ancestor_ns = ns_segments |> Enum.take(i) |> Enum.join(":")
+      name = Enum.at(ns_segments, i)
+      {ancestor_ns, name}
+    end)
+  end
+
+  defp walk_ancestors([], _target_scope, _agent_id, _visible, {last_entity, last_scopes}) do
+    {:ok, last_entity, last_scopes}
+  end
+
+  defp walk_ancestors([ancestor | rest], target_scope, agent_id, visible, prev) do
+    case handle_ancestor(ancestor, target_scope, agent_id, visible, prev) do
+      {:ok, scopes} ->
+        walk_ancestors(rest, target_scope, agent_id, visible, {ancestor, scopes})
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp handle_ancestor(ancestor, target_scope, agent_id, visible, prev) do
+    if Semantic.entity_exists?(ancestor) do
+      with {:ok, scopes} <- fetch_entity_scope_paths(ancestor),
+           :ok <- verify_scopes_visible(scopes, visible) do
+        {:ok, scopes}
+      end
+    else
+      inherited_scopes =
+        case prev do
+          nil -> [target_scope]
+          {_prev_entity, prev_scopes} -> prev_scopes
+        end
+
+      with :ok <- verify_scopes_visible(inherited_scopes, visible),
+           :ok <- write_container_node(ancestor, agent_id),
+           :ok <- write_in_scope_edges_multi(ancestor, inherited_scopes),
+           :ok <- maybe_write_contains_edge(prev_entity(prev), ancestor) do
+        {:ok, inherited_scopes}
+      end
+    end
+  end
+
+  defp prev_entity(nil), do: nil
+  defp prev_entity({entity, _scopes}), do: entity
+
+  defp fetch_entity_scope_paths({ns, name}) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>
+        "-[:IN_SCOPE]->(s:Scope) RETURN s.path"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        scopes =
+          rows
+          |> Enum.map(fn r -> String.split(r["s.path"], ":") end)
+          |> Enum.uniq()
+
+        {:ok, scopes}
+
+      {:error, reason} ->
+        {:error,
+         %Cqr.Error{
+           code: :adapter_error,
+           message: "Grafeo error reading entity scopes: #{inspect(reason)}"
+         }}
+    end
+  end
+
+  defp verify_scopes_visible(scopes, visible) do
+    missing = Enum.reject(scopes, fn s -> s in visible end)
+
+    case missing do
+      [] ->
+        :ok
+
+      _ ->
+        formatted = Enum.map(missing, &Cqr.Types.format_scope/1)
+
+        {:error,
+         Cqr.Error.scope_access(Enum.join(formatted, ", "),
+           suggestions: Enum.map(visible, &Cqr.Types.format_scope/1)
+         )}
+    end
+  end
+
+  defp write_container_node({ns, name}, agent_id) do
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+    full_path = if ns == "", do: name, else: "#{ns}:#{name}"
+    description = "Auto-created container for #{full_path}"
+
+    # Containers are structural, not semantic: they carry no embedding
+    # (an empty list keeps the field present for schema consistency) and
+    # confidence 1.0 to reflect their non-inferential origin.
+    query =
+      "INSERT (:Entity {" <>
+        "namespace: '#{ns}', name: '#{name}', " <>
+        "type: 'container', " <>
+        "description: '#{escape(description)}', " <>
+        "certified: false, " <>
+        "confidence: 1.0, " <>
+        "asserted_by: '#{escape(agent_id)}', " <>
+        "asserted_at: '#{now}', " <>
+        "intent: 'structural container', " <>
+        "owner: '#{escape(agent_id)}', " <>
+        "reputation: 0.5, " <>
+        "freshness_hours_ago: 0, " <>
+        "embedding: []" <>
+        "})"
+
+    exec_write(query)
+  end
+
+  defp write_contains_edge({src_ns, src_name}, {tgt_ns, tgt_name}) do
+    query =
+      "MATCH (p:Entity {namespace: '#{src_ns}', name: '#{src_name}'}), " <>
+        "(c:Entity {namespace: '#{tgt_ns}', name: '#{tgt_name}'}) " <>
+        "INSERT (p)-[:CONTAINS]->(c)"
+
+    exec_write(query)
+  end
+
+  defp maybe_write_contains_edge(nil, _child), do: :ok
+  defp maybe_write_contains_edge(parent, child), do: write_contains_edge(parent, child)
+
+  # --- ASSERT: post-write integrity check ---
+  #
+  # Guards against the orphaned-entity bug: a Grafeo write that materializes
+  # the Entity node but fails on IN_SCOPE or embedding would leave the entity
+  # in the name index yet invisible to scope-filtered queries. Verify both
+  # were persisted; if not, caller rolls back via `cleanup_partial_assert`.
+  defp verify_assert_integrity(entity) do
+    with :ok <- verify_in_scope_edge_exists(entity) do
+      verify_embedding_populated(entity)
+    end
+  end
+
+  defp verify_in_scope_edge_exists({ns, name} = entity) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'})" <>
+        "-[:IN_SCOPE]->(s:Scope) RETURN count(s)"
+
+    case GrafeoServer.query(query) do
+      {:ok, [row]} ->
+        if edge_count(row) > 0 do
+          :ok
+        else
+          integrity_error(entity, "no IN_SCOPE edge after ASSERT")
+        end
+
+      {:ok, []} ->
+        integrity_error(entity, "no IN_SCOPE edge after ASSERT")
+
+      {:error, reason} ->
+        {:error,
+         %Cqr.Error{
+           code: :adapter_error,
+           message: "Integrity check failed (IN_SCOPE): #{inspect(reason)}"
+         }}
+    end
+  end
+
+  defp verify_embedding_populated({ns, name} = entity) do
+    query =
+      "MATCH (e:Entity {namespace: '#{ns}', name: '#{name}'}) RETURN e.embedding"
+
+    case GrafeoServer.query(query) do
+      {:ok, [%{"e.embedding" => embedding}]} when is_list(embedding) and embedding != [] ->
+        :ok
+
+      {:ok, [_]} ->
+        integrity_error(entity, "missing or empty embedding after ASSERT")
+
+      {:ok, []} ->
+        integrity_error(entity, "entity not found after ASSERT")
+
+      {:error, reason} ->
+        {:error,
+         %Cqr.Error{
+           code: :adapter_error,
+           message: "Integrity check failed (embedding): #{inspect(reason)}"
+         }}
+    end
+  end
+
+  defp edge_count(row) do
+    # Grafeo surfaces aggregate columns under a non-obvious key like
+    # `"countnonnull(...)"`. Grab the first numeric value so this works
+    # across the returned shapes.
+    row
+    |> Map.values()
+    |> Enum.find(&is_integer/1)
+    |> Kernel.||(0)
+  end
+
+  defp integrity_error({ns, name}, detail) do
+    {:error,
+     %Cqr.Error{
+       code: :integrity_violation,
+       message: "Post-ASSERT integrity check failed for #{ns}:#{name}: #{detail}",
+       details: %{namespace: ns, name: name},
+       retry_guidance: "The entity has been rolled back to avoid an orphan; retry the ASSERT"
+     }}
   end
 
   # Best-effort cleanup if a write step failed after the entity node was
