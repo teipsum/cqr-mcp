@@ -40,19 +40,21 @@ defmodule Cqr.Parser.Terminals do
     end)
   end
 
-  # --- Entity: entity:namespace:name ---
+  # --- Entity: entity:seg1:seg2(:segN)* ---
 
   def entity do
     string("entity:")
     |> ignore()
     |> concat(identifier())
-    |> ignore(string(":"))
-    |> concat(identifier())
+    |> times(ignore(string(":")) |> concat(identifier()), min: 1)
     |> reduce({__MODULE__, :to_entity, []})
-    |> label("entity reference (entity:namespace:name)")
+    |> label("entity reference (entity:namespace:name, hierarchical paths supported)")
   end
 
-  def to_entity([ns, name]), do: {ns, name}
+  def to_entity(segments) when is_list(segments) do
+    {ns_segments, [name]} = Enum.split(segments, -1)
+    {Enum.join(ns_segments, ":"), name}
+  end
 
   # --- Scope: scope:seg1:seg2:... ---
 
