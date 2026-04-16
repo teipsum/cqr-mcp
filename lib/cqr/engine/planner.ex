@@ -25,14 +25,23 @@ defmodule Cqr.Engine.Planner do
   skipped and every capable adapter sees the call.
   """
 
-  @default_adapters [Cqr.Adapter.Grafeo]
-
   @doc """
   The fallback adapter list used when the engine context does not
   supply an `:adapters` override. Exposed so the non-planned engine
   paths (ASSERT, TRACE, SIGNAL, etc.) can share the same default.
+
+  Reads from `Application.get_env(:cqr_mcp, :adapters)` at call time
+  so runtime config and per-environment overrides are respected.
+  Falls back to `[Cqr.Adapter.Grafeo]` when no config is set.
+
+  Each module in the list is validated: it must be loaded and must
+  declare `@behaviour Cqr.Adapter.Behaviour`. If any module fails
+  validation, an `{:error, %Cqr.Error{}}` is returned instead.
   """
-  def default_adapters, do: @default_adapters
+  def default_adapters do
+    adapters = Application.get_env(:cqr_mcp, :adapters, [Cqr.Adapter.Grafeo])
+    validate_adapters(adapters)
+  end
 
   @doc """
   Resolve a single adapter for a given capability from the engine
@@ -55,7 +64,10 @@ defmodule Cqr.Engine.Planner do
   if no prefixed adapter matches.
   """
   def resolve_adapter(context, capability, entity_address) when is_atom(capability) do
-    adapters = Map.get(context, :adapters) || @default_adapters
+    adapters =
+      Map.get(context, :adapters) ||
+        Application.get_env(:cqr_mcp, :adapters, [Cqr.Adapter.Grafeo])
+
     capable = Enum.filter(adapters, fn adapter -> capability in adapter.capabilities() end)
     routed = filter_by_namespace(capable, top_namespace(entity_address))
 
@@ -82,7 +94,13 @@ defmodule Cqr.Engine.Planner do
     - opts: keyword list, may include `:adapters` override
   """
   def plan(ast, opts \\ []) do
-    adapters = Keyword.get(opts, :adapters, @default_adapters)
+    adapters =
+      Keyword.get(
+        opts,
+        :adapters,
+        Application.get_env(:cqr_mcp, :adapters, [Cqr.Adapter.Grafeo])
+      )
+
     primitive = primitive_type(ast)
 
     capable =
@@ -157,4 +175,57 @@ defmodule Cqr.Engine.Planner do
   end
 
   defp adapter_universal?(adapter), do: adapter.namespace_prefix() == nil
+
+  # --- Adapter validation ---
+  #
+  # Checks each configured module is loaded and declares the behaviour.
+  # Returns the list on success or `{:error, %Cqr.Error{}}` on failure.
+
+  defp validate_adapters(adapters) when is_list(adapters) do
+    case Enum.find(adapters, &(!valid_adapter?(&1))) do
+      nil ->
+        adapters
+
+      bad ->
+        {:error, adapter_validation_error(bad)}
+    end
+  end
+
+  defp valid_adapter?(module) when is_atom(module) do
+    case Code.ensure_loaded(module) do
+      {:module, ^module} ->
+        behaviours =
+          module.module_info(:attributes)
+          |> Keyword.get_values(:behaviour)
+          |> List.flatten()
+
+        Cqr.Adapter.Behaviour in behaviours
+
+      {:error, _} ->
+        false
+    end
+  end
+
+  defp valid_adapter?(_), do: false
+
+  defp adapter_validation_error(module) do
+    reason =
+      case Code.ensure_loaded(module) do
+        {:module, _} ->
+          "module #{inspect(module)} does not implement Cqr.Adapter.Behaviour"
+
+        {:error, _} ->
+          "module #{inspect(module)} could not be loaded " <>
+            "(not compiled or not in the code path)"
+      end
+
+    %Cqr.Error{
+      code: :adapter_not_loaded,
+      message: "Invalid adapter configuration: #{reason}",
+      suggestions: [
+        "Check :adapters in config :cqr_mcp",
+        "Ensure the adapter dependency is included in mix.exs"
+      ]
+    }
+  end
 end
