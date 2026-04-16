@@ -122,10 +122,15 @@ defmodule Cqr.Parser.Terminals do
   end
 
   # --- String literal: "..." ---
+  #
+  # `utf8_string` preserves multi-byte UTF-8 sequences as-is. `ascii_string`
+  # would interpret each byte of a multi-byte codepoint (e.g. `—` 0xE2 0x80
+  # 0x94) as a separate Latin-1 character and re-encode it, doubling the
+  # byte count and producing mojibake like `â\u0080\u0094`.
 
   def string_literal do
     ignore(string("\""))
-    |> concat(ascii_string([{:not, ?"}], min: 0))
+    |> concat(utf8_string([{:not, ?"}], min: 0))
     |> ignore(string("\""))
     |> label("quoted string")
   end
