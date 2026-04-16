@@ -354,7 +354,19 @@ defmodule Cqr.Repo.Seed do
     end
   end
 
-  defp escape(str) do
-    String.replace(str, "'", "\\'")
+  # See `Cqr.Adapter.Grafeo.escape/1` for the full rationale. Kept in sync
+  # so seed payloads with backslashes or newlines do not wedge the NIF.
+  defp escape(nil), do: ""
+
+  defp escape(str) when is_binary(str) do
+    str
+    |> String.replace("\\", "\\\\")
+    |> String.replace("'", "\\'")
+    |> String.replace("\n", "\\n")
+    |> String.replace("\r", "\\r")
+    |> String.replace("\t", "\\t")
+    |> String.replace("\0", "")
   end
+
+  defp escape(other), do: escape(to_string(other))
 end
