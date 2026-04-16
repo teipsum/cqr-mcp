@@ -181,3 +181,76 @@ defmodule Cqr.Engine.PlannerTest do
     end
   end
 end
+
+defmodule Cqr.Engine.PlannerConfigTest do
+  @moduledoc """
+  Tests for config-driven adapter loading via Application env.
+
+  Isolated from the main PlannerTest because these tests mutate
+  global Application env and must run with `async: false`.
+  """
+  use ExUnit.Case, async: false
+
+  alias Cqr.Engine.Planner
+
+  defmodule ConfigMockAdapter do
+    @behaviour Cqr.Adapter.Behaviour
+
+    @impl true
+    def capabilities, do: [:resolve, :discover]
+
+    @impl true
+    def namespace_prefix, do: "mock"
+
+    @impl true
+    def resolve(_expression, _scope_context, _opts), do: {:ok, %Cqr.Result{data: []}}
+
+    @impl true
+    def discover(_expression, _scope_context, _opts), do: {:ok, %Cqr.Result{data: []}}
+
+    @impl true
+    def normalize(raw, _metadata), do: raw
+
+    @impl true
+    def health_check, do: :ok
+  end
+
+  defmodule NotAnAdapter do
+    @moduledoc "A module that does not implement Cqr.Adapter.Behaviour."
+    def hello, do: :world
+  end
+
+  setup do
+    Application.delete_env(:cqr_mcp, :adapters)
+    on_exit(fn -> Application.delete_env(:cqr_mcp, :adapters) end)
+    :ok
+  end
+
+  describe "default_adapters/0 — config-driven loading" do
+    test "returns [Cqr.Adapter.Grafeo] when no config is set (backward compat)" do
+      assert [Cqr.Adapter.Grafeo] = Planner.default_adapters()
+    end
+
+    test "returns configured adapters when config is set" do
+      Application.put_env(:cqr_mcp, :adapters, [Cqr.Adapter.Grafeo, ConfigMockAdapter])
+
+      assert [Cqr.Adapter.Grafeo, ConfigMockAdapter] = Planner.default_adapters()
+    end
+
+    test "returns error when config references an undefined module" do
+      Application.put_env(:cqr_mcp, :adapters, [Cqr.Adapter.Grafeo, This.Module.Does.Not.Exist])
+
+      assert {:error, %Cqr.Error{code: :adapter_not_loaded} = err} = Planner.default_adapters()
+      assert err.message =~ "This.Module.Does.Not.Exist"
+      assert err.message =~ "could not be loaded"
+    end
+
+    test "returns error when config references a module that does not implement the behaviour" do
+      Application.put_env(:cqr_mcp, :adapters, [NotAnAdapter])
+
+      assert {:error, %Cqr.Error{code: :adapter_not_loaded} = err} = Planner.default_adapters()
+      assert err.message =~ "NotAnAdapter"
+      assert err.message =~ "does not implement"
+    end
+  end
+end
