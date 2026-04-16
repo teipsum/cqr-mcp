@@ -481,6 +481,146 @@ defmodule Cqr.Integration.UpdateTest do
     end
   end
 
+  describe "UTF-8 round-trip through JSON serialization" do
+    # Regression for: UPDATE on a certified entity with a multi-byte UTF-8
+    # description used to produce a response that Claude Desktop's JSON
+    # parser rejected with "Bad escaped character in JSON at position N",
+    # causing the MCP call to time out. Two bugs collided:
+    #
+    #   1. The CQR parser used `ascii_string` for DESCRIPTION/EVIDENCE,
+    #      bytewise-Latin-1-decoding every UTF-8 byte and re-encoding as
+    #      UTF-8 — turning `—` (0xE2 0x80 0x94) into 6 bytes of mojibake.
+    #   2. The MCP wire encoder emitted raw multi-byte UTF-8 in JSON, which
+    #      Claude Desktop's stricter parser refuses.
+    #
+    # This test exercises the full ASSERT → CERTIFY → UPDATE path with a
+    # large multi-byte description, then serializes via the same
+    # Jason options the wire transports use (`escape: :unicode_safe`),
+    # and round-trips the JSON to prove old + new descriptions survive
+    # intact.
+    test "ASSERT + CERTIFY + UPDATE preserves multi-byte UTF-8 in descriptions" do
+      # Em-dash (—), en-dash (–), curly quotes (", ", ', '), ellipsis (…),
+      # and accented letters (é, ñ). Every 3-byte sequence that the old
+      # parser corrupted.
+      original =
+        "Metric — tracks churn (rolling 30‑day window). " <>
+          "Don't confuse with the \u201Ccanonical\u201D definition — see policy. " <>
+          "Accents: é ñ ü. Dashes: – —. Ellipsis: …"
+
+      big_original = original |> List.duplicate(40) |> Enum.join(" / ")
+      original_bytes = byte_size(big_original)
+      assert original_bytes > 4000, "fixture must exceed the ~4KB threshold"
+
+      assert_args = %{
+        "entity" => "entity:test_update:utf8_roundtrip",
+        "type" => "metric",
+        "description" => big_original,
+        "intent" => "Exercise UPDATE under UTF-8 load",
+        "derived_from" => "entity:product:churn_rate"
+      }
+
+      assert {:ok, _} = CqrMcp.Tools.call("cqr_assert", assert_args, @product_context)
+
+      for s <- ["proposed", "under_review", "certified"] do
+        certify("utf8_roundtrip", s, "authority:data_governance_board")
+      end
+
+      new_desc =
+        "Revised — now uses the 7‑day rolling window. " <>
+          "Matches \u201Ccanonical\u201D doc. é ñ ü … – —"
+
+      update_args = %{
+        "entity" => "entity:test_update:utf8_roundtrip",
+        "change_type" => "correction",
+        "description" => new_desc,
+        "evidence" => "Clarifying window length — see revised doc."
+      }
+
+      assert {:ok, result} =
+               CqrMcp.Tools.call("cqr_update", update_args, @product_context)
+
+      # Simulate the wire encoding used by both stdio and SSE transports.
+      wire_json = Jason.encode!(result, escape: :unicode_safe)
+
+      # Pure ASCII on the wire: every non-ASCII codepoint must be emitted
+      # as a `\uXXXX` escape so strict JSON parsers (Claude Desktop's
+      # included) never see a raw multi-byte sequence.
+      assert Regex.match?(~r/^[\x00-\x7F]*$/, wire_json),
+             "wire payload must be pure ASCII — got non-ASCII bytes"
+
+      # Round-trip: decode the wire payload and verify old + new
+      # descriptions survived intact, byte-for-byte.
+      assert {:ok, decoded} = Jason.decode(wire_json)
+
+      row = decoded["data"] |> hd()
+      assert row["previous_description"] == big_original
+      assert row["new_description"] == new_desc
+      assert byte_size(row["previous_description"]) == original_bytes
+      assert row["evidence"] == "Clarifying window length — see revised doc."
+    end
+
+    test "tool dispatch + Jason.encode!/2 produces decodable ASCII for large payloads" do
+      # The `text` field path used by CqrMcp.Handler.handle_method("tools/call", …).
+      # Uses the same inner `Jason.encode!(result, pretty: true)` and outer
+      # `Jason.encode!(response, escape: :unicode_safe)` as the real stdio
+      # transport. Proves the full MCP envelope stays decodable end-to-end
+      # when the payload exceeds ~8KB with UTF-8 content.
+      # Chunks joined by " / " — no trailing whitespace (sanitize_quoted
+      # in CqrMcp.Tools trims it, which would otherwise shrink the payload
+      # by one byte).
+      chunk = "dogs — cats – é ñ ü … \u201Cquoted\u201D"
+      big = chunk |> List.duplicate(300) |> Enum.join(" / ")
+
+      assert {:ok, _} =
+               CqrMcp.Tools.call(
+                 "cqr_assert",
+                 %{
+                   "entity" => "entity:test_update:utf8_envelope",
+                   "type" => "metric",
+                   "description" => big,
+                   "intent" => "Envelope round-trip test",
+                   "derived_from" => "entity:product:churn_rate"
+                 },
+                 @product_context
+               )
+
+      for s <- ["proposed", "under_review", "certified"] do
+        certify("utf8_envelope", s, "authority:data_governance_board")
+      end
+
+      assert {:ok, result} =
+               CqrMcp.Tools.call(
+                 "cqr_update",
+                 %{
+                   "entity" => "entity:test_update:utf8_envelope",
+                   "change_type" => "correction",
+                   "description" => "Shorter revision — é",
+                   "evidence" => "trim"
+                 },
+                 @product_context
+               )
+
+      inner_text = Jason.encode!(result, pretty: true)
+
+      envelope = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "result" => %{
+          "content" => [%{"type" => "text", "text" => inner_text}]
+        }
+      }
+
+      wire = Jason.encode!(envelope, escape: :unicode_safe)
+      assert Regex.match?(~r/^[\x00-\x7F]*$/, wire)
+
+      {:ok, decoded} = Jason.decode(wire)
+      text = decoded["result"]["content"] |> hd() |> Map.fetch!("text")
+      {:ok, inner} = Jason.decode(text)
+
+      assert inner["data"] |> hd() |> Map.fetch!("previous_description") == big
+    end
+  end
+
   describe "validation" do
     test "UPDATE without CHANGE_TYPE fails with missing_required_field" do
       assert_fixture("missing_ct")

@@ -67,7 +67,7 @@ defmodule CqrMcp.SSE.Router do
     case conn.body_params do
       %{} = request when map_size(request) > 0 ->
         response = CqrMcp.Handler.handle_request(request) || %{}
-        payload = Jason.encode!(response)
+        payload = Jason.encode!(response, escape: :unicode_safe)
 
         broadcast_sse_event(payload)
 
