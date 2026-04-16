@@ -31,6 +31,9 @@ defmodule Cqr.Adapter.Grafeo do
     ]
 
   @impl true
+  def namespace_prefix, do: nil
+
+  @impl true
   def resolve(%Cqr.Resolve{entity: entity} = expression, scope_context, _opts) do
     visible = scope_context[:visible_scopes] || []
 

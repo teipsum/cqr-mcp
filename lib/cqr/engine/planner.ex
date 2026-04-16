@@ -2,9 +2,27 @@ defmodule Cqr.Engine.Planner do
   @moduledoc """
   Query planner — determines which adapters to query for a given AST.
 
-  In V1 there is only one adapter (Grafeo), but the planner supports
-  multiple adapters architecturally. Adding PostgreSQL or Neo4j is a
-  configuration change, not a code change.
+  Routing has two axes:
+
+    * Capability — the adapter must declare support for the primitive
+      (`:resolve`, `:discover`, ...). Adapters that do not declare the
+      capability are filtered out.
+
+    * Namespace — the adapter must handle the top-level namespace of
+      the target entity address. The top-level namespace is the part
+      of the entity's namespace string before the first `:` — for
+      `{"agent:product_strategy", "orientation"}` it is `"agent"`; for
+      `{"github", "issues"}` it is `"github"`.
+
+  Adapters declare the namespaces they handle via
+  `namespace_prefix/0`. A specific prefix (or list of prefixes) means
+  the adapter only receives traffic for those namespaces. `nil` means
+  the adapter is a universal fallback — it receives traffic for any
+  namespace that has no matching prefixed adapter.
+
+  Free-text DISCOVER (`DISCOVER "search term"`) has no entity address
+  and therefore no namespace. In that case namespace routing is
+  skipped and every capable adapter sees the call.
   """
 
   @default_adapters [Cqr.Adapter.Grafeo]
@@ -21,16 +39,28 @@ defmodule Cqr.Engine.Planner do
   context. Returns `{:ok, adapter}` for the first adapter declaring
   `capability`, or `{:error, %Cqr.Error{}}` if none is applicable.
 
-  Checks `context[:adapters]` first and falls back to
-  `default_adapters/0`. Used by the engine modules whose primitives
-  are not routed through `plan/2` (ASSERT, TRACE, SIGNAL, REFRESH,
-  AWARENESS, HYPOTHESIZE, COMPARE, ANCHOR).
+  Backward-compatible wrapper that performs no namespace routing —
+  equivalent to `resolve_adapter(context, capability, nil)`.
   """
   def resolve_adapter(context, capability) when is_atom(capability) do
-    adapters = Map.get(context, :adapters) || @default_adapters
+    resolve_adapter(context, capability, nil)
+  end
 
-    case Enum.find(adapters, fn adapter -> capability in adapter.capabilities() end) do
-      nil ->
+  @doc """
+  Resolve a single adapter for a given capability and target entity
+  address. `entity_address` is either a `{namespace, name}` tuple or
+  `nil` when the call has no entity (free-text DISCOVER). When an
+  address is supplied, the adapter pool is first narrowed by the
+  top-level namespace; a universal (nil-prefix) adapter is used only
+  if no prefixed adapter matches.
+  """
+  def resolve_adapter(context, capability, entity_address) when is_atom(capability) do
+    adapters = Map.get(context, :adapters) || @default_adapters
+    capable = Enum.filter(adapters, fn adapter -> capability in adapter.capabilities() end)
+    routed = filter_by_namespace(capable, top_namespace(entity_address))
+
+    case routed do
+      [] ->
         {:error,
          %Cqr.Error{
            code: :no_adapter,
@@ -38,7 +68,7 @@ defmodule Cqr.Engine.Planner do
            suggestions: ["Check adapter configuration"]
          }}
 
-      adapter ->
+      [adapter | _] ->
         {:ok, adapter}
     end
   end
@@ -55,12 +85,14 @@ defmodule Cqr.Engine.Planner do
     adapters = Keyword.get(opts, :adapters, @default_adapters)
     primitive = primitive_type(ast)
 
-    applicable =
+    capable =
       Enum.filter(adapters, fn adapter ->
         primitive in adapter.capabilities()
       end)
 
-    case applicable do
+    routed = filter_by_namespace(capable, extract_top_namespace(ast))
+
+    case routed do
       [] ->
         {:error,
          %Cqr.Error{
@@ -77,4 +109,52 @@ defmodule Cqr.Engine.Planner do
   defp primitive_type(%Cqr.Resolve{}), do: :resolve
   defp primitive_type(%Cqr.Discover{}), do: :discover
   defp primitive_type(%Cqr.Certify{}), do: :certify
+
+  # --- Namespace extraction ---
+
+  defp extract_top_namespace(%Cqr.Resolve{entity: entity}), do: top_namespace(entity)
+
+  defp extract_top_namespace(%Cqr.Discover{related_to: {:entity, entity}}),
+    do: top_namespace(entity)
+
+  defp extract_top_namespace(%Cqr.Discover{related_to: {:prefix, [seg | _]}})
+       when is_binary(seg),
+       do: seg
+
+  defp extract_top_namespace(%Cqr.Discover{related_to: {:search, _}}), do: nil
+
+  defp extract_top_namespace(_ast), do: nil
+
+  defp top_namespace({ns, _name}) when is_binary(ns) do
+    ns |> String.split(":", parts: 2) |> List.first()
+  end
+
+  defp top_namespace(_), do: nil
+
+  # --- Namespace-based filtering ---
+  #
+  # A nil `top_ns` means the caller has no entity address to route by
+  # (e.g. free-text DISCOVER), so every capable adapter sees the call.
+  # Otherwise prefer adapters whose `namespace_prefix/0` matches the
+  # top-level namespace, and fall back to universal (nil-prefix)
+  # adapters if no prefixed adapter claims the namespace.
+
+  defp filter_by_namespace(adapters, nil), do: adapters
+
+  defp filter_by_namespace(adapters, top_ns) do
+    case Enum.filter(adapters, &adapter_matches?(&1, top_ns)) do
+      [] -> Enum.filter(adapters, &adapter_universal?/1)
+      prefixed -> prefixed
+    end
+  end
+
+  defp adapter_matches?(adapter, top_ns) do
+    case adapter.namespace_prefix() do
+      nil -> false
+      prefix when is_binary(prefix) -> prefix == top_ns
+      prefixes when is_list(prefixes) -> top_ns in prefixes
+    end
+  end
+
+  defp adapter_universal?(adapter), do: adapter.namespace_prefix() == nil
 end
