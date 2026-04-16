@@ -283,10 +283,13 @@ defmodule Cqr.Repo.Semantic do
 
   @doc "Find entities similar to a search term (by name or description substring)."
   def search_entities(term, visible_scope_paths \\ nil) do
+    lowered = escape_gql(String.downcase(term))
+    raw = escape_gql(term)
+
     case GrafeoServer.query(
            "MATCH (e:Entity)-[:IN_SCOPE]->(s:Scope) " <>
-             "WHERE e.name CONTAINS '#{String.downcase(term)}' " <>
-             "OR e.description CONTAINS '#{term}' " <>
+             "WHERE e.name CONTAINS '#{lowered}' " <>
+             "OR e.description CONTAINS '#{raw}' " <>
              "RETURN e.namespace, e.name, e.type, e.description, s.path"
          ) do
       {:ok, rows} ->
@@ -334,6 +337,24 @@ defmodule Cqr.Repo.Semantic do
   defp nilify_empty(nil), do: nil
   defp nilify_empty(""), do: nil
   defp nilify_empty(value), do: value
+
+  # Free-text safe quoting for single-quoted GQL literals. Mirrors
+  # `Cqr.Adapter.Grafeo.escape/1` — see that module for why every escape
+  # below is load-bearing. Duplicated here rather than cross-imported so
+  # the read path does not take a compile-time dependency on the adapter.
+  defp escape_gql(nil), do: ""
+
+  defp escape_gql(str) when is_binary(str) do
+    str
+    |> String.replace("\\", "\\\\")
+    |> String.replace("'", "\\'")
+    |> String.replace("\n", "\\n")
+    |> String.replace("\r", "\\r")
+    |> String.replace("\t", "\\t")
+    |> String.replace("\0", "")
+  end
+
+  defp escape_gql(other), do: escape_gql(to_string(other))
 
   defp row_to_entity_summary(row) do
     %{
