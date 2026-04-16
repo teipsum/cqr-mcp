@@ -2,21 +2,25 @@ defmodule Cqr.Parser.Awareness do
   @moduledoc """
   AWARENESS-specific parser combinators.
 
-  Parses:
+  Parses two modes:
 
       AWARENESS active_agents
         [WITHIN scope:seg1[:seg2]]
         [OVER last <duration>]
         [LIMIT <integer>]
 
-  `active_agents` is a literal keyword marking the scan target. The
-  optional `WITHIN` clause narrows the scan to a specific scope subtree
-  (intersected with the agent's sandbox by the engine). `OVER last
-  <duration>` filters audit events to the recent window. `LIMIT <int>`
-  caps the number of agents returned (default 20).
+      AWARENESS search
+        [WITHIN scope:seg1[:seg2]]
+        [OVER last <duration>]
+        [LIMIT <integer>]
+        [NAMESPACE <prefix>]
+        [PRIMITIVE <assert|certify|signal>]
+        [INTENT "<text>"]
+        [AGENT "<agent_id>"]
 
   Optional clauses may appear in any order to match LLM generation
-  variance.
+  variance. Search-mode filters are AND-composed: a row must pass
+  every non-nil filter.
   """
 
   import NimbleParsec
@@ -50,11 +54,63 @@ defmodule Cqr.Parser.Awareness do
     |> label("LIMIT clause")
   end
 
+  # --- Search-mode filter clauses ---
+
+  # Token: non-whitespace characters, used for namespace prefixes and
+  # agent IDs which may contain colons (e.g. "product:retention",
+  # "twin:investigator").
+  defp token do
+    ascii_string([{:not, ?\s}, {:not, ?\t}, {:not, ?\n}], min: 1)
+    |> label("token")
+  end
+
+  def namespace_clause do
+    ignore(string("NAMESPACE"))
+    |> ignore(Terminals.sp())
+    |> concat(token())
+    |> unwrap_and_tag(:namespace_prefix)
+    |> label("NAMESPACE clause")
+  end
+
+  def primitive_clause do
+    ignore(string("PRIMITIVE"))
+    |> ignore(Terminals.sp())
+    |> concat(
+      choice([
+        string("assert") |> replace(:assert),
+        string("certify") |> replace(:certify),
+        string("signal") |> replace(:signal)
+      ])
+    )
+    |> unwrap_and_tag(:primitive_filter)
+    |> label("PRIMITIVE clause")
+  end
+
+  def intent_clause do
+    ignore(string("INTENT"))
+    |> ignore(Terminals.sp())
+    |> concat(Terminals.string_literal())
+    |> unwrap_and_tag(:intent_search)
+    |> label("INTENT clause")
+  end
+
+  def agent_clause do
+    ignore(string("AGENT"))
+    |> ignore(Terminals.sp())
+    |> concat(token())
+    |> unwrap_and_tag(:agent_filter)
+    |> label("AGENT clause")
+  end
+
   def optional_clause do
     choice([
       within_clause(),
       over_clause(),
-      limit_clause()
+      limit_clause(),
+      namespace_clause(),
+      primitive_clause(),
+      intent_clause(),
+      agent_clause()
     ])
   end
 
@@ -63,7 +119,13 @@ defmodule Cqr.Parser.Awareness do
   def awareness do
     ignore(string("AWARENESS"))
     |> ignore(Terminals.sp())
-    |> ignore(string("active_agents"))
+    |> concat(
+      choice([
+        string("active_agents") |> replace(:active_agents),
+        string("search") |> replace(:search)
+      ])
+    )
+    |> unwrap_and_tag(:mode)
     |> repeat(
       ignore(Terminals.sp())
       |> concat(optional_clause())
@@ -75,9 +137,14 @@ defmodule Cqr.Parser.Awareness do
   def to_awareness(parts) do
     parts
     |> Enum.reduce(%Cqr.Awareness{}, fn
+      {:mode, mode}, acc -> %{acc | mode: mode}
       {:within, scope}, acc -> %{acc | within: scope}
       {:time_window, dur}, acc -> %{acc | time_window: dur}
       {:limit, n}, acc -> %{acc | limit: n}
+      {:namespace_prefix, prefix}, acc -> %{acc | namespace_prefix: prefix}
+      {:primitive_filter, prim}, acc -> %{acc | primitive_filter: prim}
+      {:intent_search, text}, acc -> %{acc | intent_search: text}
+      {:agent_filter, agent_id}, acc -> %{acc | agent_filter: agent_id}
     end)
   end
 end

@@ -1673,6 +1673,7 @@ defmodule Cqr.Adapter.Grafeo do
         agents =
           rows
           |> Enum.filter(&within_window?(&1, cutoff))
+          |> apply_search_filters(expression)
           |> group_by_agent()
           |> Enum.map(&summarise_agent/1)
           |> Enum.sort_by(fn a -> {-a.activity_count, a.last_seen} end)
@@ -1890,6 +1891,97 @@ defmodule Cqr.Adapter.Grafeo do
     do: Enum.take(agents, n)
 
   defp apply_limit(agents, _), do: agents
+
+  # --- Search-mode filters ---
+  #
+  # When mode is :search, audit rows are filtered by AND-composable
+  # predicates before grouping. Each non-nil filter narrows the set;
+  # a row must pass every active filter.
+
+  defp apply_search_filters(rows, %Cqr.Awareness{mode: :active_agents}), do: rows
+
+  defp apply_search_filters(rows, %Cqr.Awareness{mode: :search} = expr) do
+    rows
+    |> filter_by_namespace(expr.namespace_prefix)
+    |> filter_by_primitive(expr.primitive_filter)
+    |> filter_by_intent(expr.intent_search)
+    |> filter_by_agent(expr.agent_filter)
+  end
+
+  defp filter_by_namespace(rows, nil), do: rows
+
+  defp filter_by_namespace(rows, prefix) do
+    Enum.filter(rows, fn row ->
+      case extract_namespace(row.entity) do
+        nil -> false
+        ns -> String.starts_with?(ns, prefix)
+      end
+    end)
+  end
+
+  # Entity format is "entity:<ns>:<name>" where <ns> may contain colons
+  # for hierarchical namespaces (e.g. "entity:product:retention:cohort:q4"
+  # has namespace "product:retention:cohort" and name "q4"). The prefix
+  # filter matches against the full namespace path.
+  defp extract_namespace("entity:" <> rest) do
+    segments = String.split(rest, ":")
+
+    case segments do
+      [_single] -> nil
+      parts -> parts |> Enum.drop(-1) |> Enum.join(":")
+    end
+  end
+
+  defp extract_namespace(_), do: nil
+
+  @kind_to_primitive %{assertion: :assert, certification: :certify, signal: :signal}
+
+  defp filter_by_primitive(rows, nil), do: rows
+
+  defp filter_by_primitive(rows, primitive) do
+    Enum.filter(rows, fn row ->
+      Map.get(@kind_to_primitive, row.kind) == primitive
+    end)
+  end
+
+  defp filter_by_intent(rows, nil), do: rows
+
+  defp filter_by_intent(rows, search_text) do
+    downcased = String.downcase(search_text)
+
+    Enum.filter(rows, fn row ->
+      case Map.get(row, :intent) do
+        nil -> false
+        intent -> String.contains?(String.downcase(intent), downcased)
+      end
+    end)
+  end
+
+  defp filter_by_agent(rows, nil), do: rows
+
+  defp filter_by_agent(rows, agent_id) do
+    Enum.filter(rows, fn row -> row.agent_id == agent_id end)
+  end
+
+  defp awareness_provenance(%Cqr.Awareness{mode: :search} = expr, visible) do
+    filters =
+      [
+        if(expr.namespace_prefix, do: "namespace=#{expr.namespace_prefix}"),
+        if(expr.primitive_filter, do: "primitive=#{expr.primitive_filter}"),
+        if(expr.intent_search, do: "intent=#{expr.intent_search}"),
+        if(expr.agent_filter, do: "agent=#{expr.agent_filter}")
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(", ")
+
+    window =
+      case expr.time_window do
+        nil -> "full history"
+        {amount, unit} -> "last #{amount}#{unit}"
+      end
+
+    "AWARENESS search over #{length(visible)} visible scope(s), #{window}, filters: #{filters}"
+  end
 
   defp awareness_provenance(%Cqr.Awareness{time_window: nil}, visible) do
     "AWARENESS scan over #{length(visible)} visible scope(s), full history"
