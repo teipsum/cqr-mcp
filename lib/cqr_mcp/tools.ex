@@ -215,6 +215,13 @@ defmodule CqrMcp.Tools do
                 "by direction. Edges are stored once, directionally; the " <>
                 "relationship type always reads in its original direction.",
             "default" => "both"
+          },
+          "max_results" => %{
+            "type" => "integer",
+            "description" =>
+              "Maximum number of results to return. Applies to all three " <>
+                "DISCOVER modes (anchor, prefix, free-text). Default 10.",
+            "default" => 10
           }
         },
         "required" => ["topic"]
@@ -805,6 +812,12 @@ defmodule CqrMcp.Tools do
       if args["direction"] in ["outbound", "inbound", "both"],
         do: parts ++ ["DIRECTION #{args["direction"]}"],
         else: parts
+
+    parts =
+      case args["max_results"] do
+        n when is_integer(n) and n > 0 -> parts ++ ["LIMIT #{n}"]
+        _ -> parts
+      end
 
     Enum.join(parts, " ")
   end
