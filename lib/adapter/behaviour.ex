@@ -75,6 +75,8 @@ defmodule Cqr.Adapter.Behaviour do
 
   @callback capabilities() :: [atom()]
 
+  @callback namespace_prefix() :: nil | String.t() | [String.t()]
+
   @optional_callbacks [
     assert: 3,
     trace: 3,

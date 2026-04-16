@@ -235,6 +235,7 @@ defmodule Cqr.EngineTest do
       defmodule MockAdapter do
         @behaviour Cqr.Adapter.Behaviour
         def capabilities, do: [:resolve]
+        def namespace_prefix, do: nil
 
         def resolve(_, _, _),
           do: {:ok, %Cqr.Result{data: [%{source: "mock"}], sources: ["mock"]}}
@@ -255,6 +256,7 @@ defmodule Cqr.EngineTest do
       defmodule ConflictMockAdapter do
         @behaviour Cqr.Adapter.Behaviour
         def capabilities, do: [:resolve]
+        def namespace_prefix, do: nil
 
         def resolve(_, _, _) do
           {:ok,
