@@ -88,7 +88,7 @@ defmodule CqrMcp.Server do
   end
 
   defp write_response(response) do
-    json = Jason.encode!(response)
+    json = Jason.encode!(response, escape: :unicode_safe)
     IO.write(:stdio, json <> "\n")
   end
 end
