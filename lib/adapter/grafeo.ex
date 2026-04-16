@@ -1124,9 +1124,31 @@ defmodule Cqr.Adapter.Grafeo do
     end
   end
 
+  # Escape a free-text value for safe interpolation into a single-quoted
+  # GQL string literal. The previous implementation only substituted the
+  # single quote, which produced malformed GQL whenever the value carried
+  # a backslash, newline, or carriage return — characters that are common
+  # in 4KB+ descriptions pasted from source code, logs, or multi-line
+  # prose. Malformed GQL made the Grafeo Rust parser hang indefinitely on
+  # the DirtyIo scheduler, wedging the entire embedded server.
+  #
+  # Order matters: backslashes must be escaped first so that the escape
+  # sequences we introduce in later passes (e.g. `\'`, `\n`) are not
+  # themselves re-escaped. Null bytes are dropped outright because they
+  # have no valid encoding inside a single-quoted literal.
   defp escape(nil), do: ""
-  defp escape(str) when is_binary(str), do: String.replace(str, "'", "\\'")
-  defp escape(other), do: to_string(other)
+
+  defp escape(str) when is_binary(str) do
+    str
+    |> String.replace("\\", "\\\\")
+    |> String.replace("'", "\\'")
+    |> String.replace("\n", "\\n")
+    |> String.replace("\r", "\\r")
+    |> String.replace("\t", "\\t")
+    |> String.replace("\0", "")
+  end
+
+  defp escape(other), do: escape(to_string(other))
 
   # --- Private ---
 
