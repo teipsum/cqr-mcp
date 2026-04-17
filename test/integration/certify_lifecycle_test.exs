@@ -14,6 +14,7 @@ defmodule Cqr.Integration.CertifyLifecycleTest do
   use ExUnit.Case
 
   alias Cqr.Engine
+  alias Cqr.Grafeo.Codec
   alias Cqr.Grafeo.Server, as: GrafeoServer
 
   @product_context %{scope: ["company", "product"], agent_id: "twin:product"}
@@ -488,7 +489,7 @@ defmodule Cqr.Integration.CertifyLifecycleTest do
 
       for row <- rows do
         expected = evidence_by_phase[row["r.new_status"]]
-        assert row["r.evidence"] == expected
+        assert Codec.decode(row["r.evidence"]) == expected
       end
     end
   end

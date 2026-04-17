@@ -34,6 +34,7 @@ defmodule Cqr.Integration.ExhaustiveMcpTest do
   use ExUnit.Case, async: false
 
   alias Cqr.Engine
+  alias Cqr.Grafeo.Codec
   alias Cqr.Grafeo.Server, as: GrafeoServer
   alias Cqr.Repo.Semantic, as: RepoSemantic
 
@@ -893,7 +894,7 @@ defmodule Cqr.Integration.ExhaustiveMcpTest do
         )
 
       assert length(rows) == 3
-      Enum.each(rows, fn r -> assert r["r.evidence"] =~ "f10" end)
+      Enum.each(rows, fn r -> assert Codec.decode(r["r.evidence"]) =~ "f10" end)
     end
 
     test "F11 finance agent cannot certify a product entity" do
