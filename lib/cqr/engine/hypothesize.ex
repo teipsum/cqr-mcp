@@ -79,13 +79,13 @@ defmodule Cqr.Engine.Hypothesize do
       {:error, :not_found} ->
         {:error,
          Cqr.Error.entity_not_found(Cqr.Types.format_entity(entity),
-           similar: Semantic.search_entities(elem(entity, 1), visible)
+           similar: []
          )}
 
       {:error, :not_visible} ->
         {:error,
          Cqr.Error.entity_not_found(Cqr.Types.format_entity(entity),
-           similar: Semantic.search_entities(elem(entity, 1), visible)
+           similar: []
          )}
 
       {:error, reason} ->
