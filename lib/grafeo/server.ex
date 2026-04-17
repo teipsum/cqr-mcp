@@ -72,6 +72,41 @@ defmodule Cqr.Grafeo.Server do
     GenServer.call(name, :checkpoint)
   end
 
+  @doc """
+  Run `fun` with a hard millisecond budget.
+
+  Returns whatever `fun` returns if it completes in time, otherwise
+  `{:error, :nif_timeout}`. On timeout the worker Task is unlinked and
+  killed so the caller's mailbox stays clean — but a running dirty NIF
+  cannot be preempted from the BEAM side; it keeps the scheduler slot
+  (and any internal DB lock it held) until it chooses to yield. This is
+  why the real fix is to never construct malformed GQL in the first
+  place; the wrapper exists so a future escape regression surfaces as a
+  bounded error rather than a silent process wedge.
+
+  Exposed publicly so the timeout behaviour is testable without faking
+  a hung NIF.
+  """
+  @spec run_with_timeout(pos_integer(), (-> term())) :: term() | {:error, :nif_timeout}
+  def run_with_timeout(timeout_ms, fun) when is_integer(timeout_ms) and is_function(fun, 0) do
+    task = Task.async(fun)
+
+    case Task.yield(task, timeout_ms) do
+      {:ok, result} ->
+        result
+
+      {:exit, reason} ->
+        # Task crashed mid-run. Keeps the contract bounded if the
+        # callable raises before the timeout fires.
+        Logger.error("Grafeo NIF task exited: #{inspect(reason)}")
+        {:error, :nif_timeout}
+
+      nil ->
+        Task.shutdown(task, :brutal_kill)
+        {:error, :nif_timeout}
+    end
+  end
+
   # --- Callbacks ---
 
   @impl true
@@ -200,30 +235,22 @@ defmodule Cqr.Grafeo.Server do
 
   defp run_checkpoint(_db, :memory), do: :ok
 
-  # Run Native.execute/2 inside a short-lived Task so a hung DirtyIo NIF
-  # cannot park this GenServer forever. On timeout the Task is shut down
-  # and an `{:error, :nif_timeout}` is returned; the BEAM cannot preempt
-  # the NIF itself (it keeps running on the dirty-scheduler thread until
-  # it chooses to yield), but the mailbox remains drainable so the next
-  # caller is served. The root fix is to never produce malformed GQL
-  # (see `Cqr.Adapter.Grafeo.escape/1`); this wrapper exists so a future
-  # regression degrades into an observable error rather than a silent
-  # process wedge.
+  # Run Native.execute/2 through `run_with_timeout/2` so a hung DirtyIo
+  # NIF cannot park this GenServer forever. Logs the query prefix on
+  # timeout so operators can fingerprint the offending write — the root
+  # fix is always to not produce malformed GQL in the first place (see
+  # `Cqr.Grafeo.Gql.escape/1`).
   defp execute_with_timeout(db, query, timeout) do
-    task = Task.async(fn -> Native.execute(db, query) end)
-
-    case Task.yield(task, timeout) do
-      {:ok, result} ->
-        result
-
-      nil ->
-        Task.shutdown(task, :brutal_kill)
-
+    case run_with_timeout(timeout, fn -> Native.execute(db, query) end) do
+      {:error, :nif_timeout} = err ->
         Logger.error(
           "Grafeo NIF timed out after #{timeout}ms; query prefix: #{inspect(binary_slice(query, 0, 200))}"
         )
 
-        {:error, :nif_timeout}
+        err
+
+      result ->
+        result
     end
   end
 
