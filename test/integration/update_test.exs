@@ -10,6 +10,7 @@ defmodule Cqr.Integration.UpdateTest do
   use ExUnit.Case, async: false
 
   alias Cqr.Engine
+  alias Cqr.Grafeo.Codec
   alias Cqr.Grafeo.Server, as: GrafeoServer
 
   @product_context %{scope: ["company", "product"], agent_id: "twin:update_product"}
@@ -122,10 +123,10 @@ defmodule Cqr.Integration.UpdateTest do
         )
 
       assert [row] = rows
-      assert row["v.previous_description"] == "Original description"
+      assert Codec.decode(row["v.previous_description"]) == "Original description"
       assert row["v.previous_type"] == "derived_metric"
       assert row["v.change_type"] == "correction"
-      assert row["v.evidence"] == "First correction"
+      assert Codec.decode(row["v.evidence"]) == "First correction"
       assert row["v.agent_id"] == "twin:update_product"
       assert row["v.status"] == "applied"
     end
@@ -248,7 +249,7 @@ defmodule Cqr.Integration.UpdateTest do
 
       assert Enum.any?(vr_rows, fn row ->
                row["v.status"] == "pending_review" and
-                 row["v.proposed_description"] == "Completely new meaning"
+                 Codec.decode(row["v.proposed_description"]) == "Completely new meaning"
              end)
     end
   end

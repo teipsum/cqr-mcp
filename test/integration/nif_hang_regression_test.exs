@@ -34,6 +34,7 @@ defmodule Cqr.Integration.NifHangRegressionTest do
   use ExUnit.Case, async: false
 
   alias Cqr.Engine
+  alias Cqr.Grafeo.Codec
   alias Cqr.Grafeo.Gql
   alias Cqr.Grafeo.Server, as: GrafeoServer
 
@@ -381,6 +382,253 @@ defmodule Cqr.Integration.NifHangRegressionTest do
       assert {:ok, 7} = GrafeoServer.run_with_timeout(500, fn -> {:ok, 7} end)
       assert :done = GrafeoServer.run_with_timeout(500, fn -> :done end)
     end
+  end
+
+  describe "base64 codec — full-Unicode payload stress" do
+    # The codec keeps every free-text byte out of the GQL literal by
+    # base64-encoding on the way in and decoding on the way out
+    # (see `Cqr.Grafeo.Codec`). These tests cover the character
+    # classes the task required: ASCII metachars, Latin-1, CJK, emoji,
+    # math symbols, Arabic, and Hebrew — any one of which would have
+    # tripped the old escape-only pipeline. The 10 KB payload exercises
+    # the worst-case UPDATE-on-certified path that writes two copies
+    # of the description into a single VersionRecord INSERT.
+    test "10KB all-Unicode ASSERT + CERTIFY + UPDATE redefinition completes under 30s" do
+      name = "unicode_lifecycle"
+      ns = "#{@namespace}:patent"
+      entity_ref = "entity:#{ns}:#{name}"
+      payload = unicode_payload(10_000)
+      evidence = "Review — " <> unicode_payload(1_500)
+
+      assert_completes_within(30_000, fn ->
+        assert {:ok, assert_result} =
+                 Engine.execute(
+                   ~s(ASSERT #{entity_ref} TYPE derived_metric ) <>
+                     ~s(DESCRIPTION "#{payload}" ) <>
+                     ~s(INTENT "Unicode lifecycle regression" ) <>
+                     ~s(DERIVED_FROM entity:product:churn_rate),
+                   @product_context
+                 )
+
+        assert [%{description: ^payload, intent: "Unicode lifecycle regression"}] =
+                 assert_result.data
+
+        for status <- ["proposed", "under_review", "certified"] do
+          assert {:ok, _} =
+                   Engine.execute(
+                     ~s(CERTIFY #{entity_ref} STATUS #{status} ) <>
+                       ~s(AUTHORITY "authority:review_board — é" ) <>
+                       ~s(EVIDENCE "#{evidence}"),
+                     @product_context
+                   )
+        end
+
+        # Redefinition on a certified entity — pending_review path
+        # writes both previous and proposed descriptions in a single
+        # INSERT, roughly 2× the payload size on one statement.
+        assert {:ok, _} =
+                 Engine.execute(
+                   ~s(UPDATE #{entity_ref} CHANGE_TYPE redefinition ) <>
+                     ~s(DESCRIPTION "#{payload} revision" ) <>
+                     ~s(EVIDENCE "#{evidence}"),
+                   @product_context
+                 )
+      end)
+
+      # Redefinition on a certified entity under the :standard policy
+      # routes through pending_review — the entity's description is
+      # NOT applied, the revision lives only on the VersionRecord. The
+      # fidelity check is therefore against the original payload.
+      assert {:ok, resolved} =
+               Engine.execute(
+                 "RESOLVE #{entity_ref}",
+                 @product_context
+               )
+
+      assert [%{description: description}] = resolved.data
+      assert description == payload
+    end
+
+    test "CERTIFY authority and evidence with special characters round-trip through TRACE" do
+      name = "cert_special"
+      entity_ref = "entity:#{@namespace}:#{name}"
+      authority = "authority:board — é ñ ü 'quoted' and \\backslash"
+      evidence = "Evidence: é ∑ 日 🚀"
+
+      assert {:ok, _} =
+               Engine.execute(
+                 ~s(ASSERT #{entity_ref} TYPE derived_metric ) <>
+                   ~s(DESCRIPTION "seed" ) <>
+                   ~s(INTENT "cert special regression" ) <>
+                   ~s(DERIVED_FROM entity:product:churn_rate),
+                 @product_context
+               )
+
+      assert {:ok, _} =
+               Engine.execute(
+                 ~s(CERTIFY #{entity_ref} STATUS proposed ) <>
+                   ~s(AUTHORITY "#{authority}" ) <>
+                   ~s(EVIDENCE "#{evidence}"),
+                 @product_context
+               )
+
+      assert {:ok, trace_result} =
+               Engine.execute(
+                 "TRACE #{entity_ref}",
+                 @product_context
+               )
+
+      [row] = trace_result.data
+      [cert | _] = row.certification_history
+      assert cert.authority == authority
+      assert cert.evidence == evidence
+    end
+
+    test "SIGNAL evidence with special characters round-trips via TRACE signal_history" do
+      name = "signal_special"
+      entity_ref = "entity:#{@namespace}:#{name}"
+      evidence = "Signal — é ñ 日 'quoted' with \\backslash"
+
+      assert {:ok, _} =
+               Engine.execute(
+                 ~s(ASSERT #{entity_ref} TYPE derived_metric ) <>
+                   ~s(DESCRIPTION "seed" ) <>
+                   ~s(INTENT "signal special regression" ) <>
+                   ~s(DERIVED_FROM entity:product:churn_rate),
+                 @product_context
+               )
+
+      assert {:ok, _} =
+               Engine.execute(
+                 ~s(SIGNAL reputation ON #{entity_ref} SCORE 0.7 EVIDENCE "#{evidence}"),
+                 @product_context
+               )
+
+      assert {:ok, trace_result} =
+               Engine.execute(
+                 "TRACE #{entity_ref}",
+                 @product_context
+               )
+
+      [row] = trace_result.data
+      [signal | _] = row.signal_history
+      assert signal.evidence == evidence
+    end
+
+    test "DISCOVER search surfaces entities by decoded description keyword" do
+      name = "unicode_findable"
+      payload = "Uniqueneedlephrase " <> unicode_payload(500) <> " haystack"
+
+      assert {:ok, _} =
+               Engine.execute(
+                 ~s(ASSERT entity:#{@namespace}:#{name} TYPE derived_metric ) <>
+                   ~s(DESCRIPTION "#{payload}" ) <>
+                   ~s(INTENT "DISCOVER coverage" ) <>
+                   ~s(DERIVED_FROM entity:product:churn_rate),
+                 @product_context
+               )
+
+      assert {:ok, result} =
+               Engine.execute(
+                 ~s(DISCOVER concepts RELATED TO "Uniqueneedlephrase"),
+                 @product_context
+               )
+
+      assert Enum.any?(result.data, fn row ->
+               row[:entity] == {@namespace, name}
+             end)
+    end
+
+    test "legacy raw description (no b64: sentinel) still reads through RESOLVE" do
+      # Simulate a pre-codec entity by writing raw text directly via GQL.
+      # `decode/1` passes values missing the `b64:` sentinel through
+      # unchanged, so pre-migration rows keep reading correctly.
+      name = "legacy_raw"
+      raw_description = "Raw legacy description"
+
+      assert {:ok, _} =
+               GrafeoServer.query(
+                 "INSERT (:Entity {namespace: '#{@namespace}', name: '#{name}', " <>
+                   "type: 'container', " <>
+                   "description: '#{raw_description}', " <>
+                   "certified: false, confidence: 1.0, " <>
+                   "asserted_by: 'legacy_seed', asserted_at: '2026-01-01T00:00:00Z', " <>
+                   "intent: 'legacy intent', owner: 'legacy_seed', " <>
+                   "reputation: 0.5, freshness_hours_ago: 0, embedding: []})"
+               )
+
+      assert {:ok, _} =
+               GrafeoServer.query(
+                 "MATCH (e:Entity {namespace: '#{@namespace}', name: '#{name}'}), " <>
+                   "(s:Scope {path: 'company:product'}) " <>
+                   "INSERT (e)-[:IN_SCOPE {primary: true}]->(s)"
+               )
+
+      assert {:ok, resolved} =
+               Engine.execute(
+                 "RESOLVE entity:#{@namespace}:#{name}",
+                 @product_context
+               )
+
+      assert [%{description: ^raw_description}] = resolved.data
+    end
+
+    test "RESOLVE on a non-existent entity returns entity_not_found within 1 second" do
+      assert_completes_within(1_000, fn ->
+        assert {:error, err} =
+                 Engine.execute(
+                   "RESOLVE entity:#{@namespace}:never_written",
+                   @product_context
+                 )
+
+        assert err.code == :entity_not_found
+      end)
+    end
+
+    # The codec decodes the empty string to the empty string (rather
+    # than treating it as the `b64:` sentinel with an empty payload),
+    # so fields like `Codec.decode` stay safe to call on every row a
+    # query returns. Proves the encoder never expands `""` into a
+    # sentinel that would collide with a legitimately empty value.
+    test "Cqr.Grafeo.Codec handles nil, empty, and round-trips arbitrary UTF-8" do
+      assert Codec.encode(nil) == ""
+      assert Codec.encode("") == ""
+      assert Codec.decode(nil) == nil
+      assert Codec.decode("") == ""
+
+      for value <- [
+            "plain ASCII",
+            "em-dash — and \u201Cquotes\u201D",
+            "CJK 日本語 and emoji 🚀",
+            "backslash \\ quote ' newline \n tab \t"
+          ] do
+        assert value |> Codec.encode() |> Codec.decode() == value
+      end
+    end
+  end
+
+  # Build a 10 KB+ payload with every Unicode class required by the
+  # base64 codec regression spec: ASCII metacharacters, Latin-1
+  # supplement, CJK, emoji, mathematical symbols, Arabic, Hebrew.
+  # Pure-ASCII payloads never reproduced the NIF hang; the bug required
+  # one of the unescaped classes below.
+  defp unicode_payload(target_bytes) do
+    chunk =
+      "ASCII meta: $~()/+:*#@%|[]{}<>;!?&=^ — " <>
+        "Latin-1: café naïve résumé — " <>
+        "CJK: 日本語 中文 한국어 — " <>
+        "emoji: 🚀💥✨🎯 — " <>
+        "math: ∑∫∂∆ ≠ ≤ ≥ ∞ π — " <>
+        "Arabic: مرحبا بالعالم — " <>
+        "Hebrew: שלום עולם — " <>
+        "path: C:\\Users\\alice\\notes.txt, it's 'quoted'\n\ttab and CRLF\r\n"
+
+    [chunk]
+    |> Stream.cycle()
+    |> Enum.reduce_while("", fn part, acc ->
+      next = acc <> part
+      if byte_size(next) >= target_bytes, do: {:halt, next}, else: {:cont, next}
+    end)
   end
 
   # Run `fun` inside a Task so we can surface a hang as a plain test

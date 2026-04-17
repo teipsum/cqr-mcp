@@ -6,6 +6,7 @@ defmodule Cqr.Repo.Semantic do
   All queries go through `Cqr.Grafeo.Server.query/1`.
   """
 
+  alias Cqr.Grafeo.Codec
   alias Cqr.Grafeo.Gql
   alias Cqr.Grafeo.Server, as: GrafeoServer
 
@@ -266,7 +267,7 @@ defmodule Cqr.Repo.Semantic do
             %{
               entity: {row["#{row_alias}.namespace"], row["#{row_alias}.name"]},
               type: row["#{row_alias}.type"],
-              description: row["#{row_alias}.description"],
+              description: Codec.decode(row["#{row_alias}.description"]),
               relationship: row["rel_type"],
               strength: row["r.strength"],
               direction: direction_label,
@@ -282,26 +283,67 @@ defmodule Cqr.Repo.Semantic do
     end
   end
 
-  @doc "Find entities similar to a search term (by name or description substring)."
+  @doc """
+  Find entities similar to a search term (by name substring, with a
+  post-fetch scan of the decoded description).
+
+  Descriptions are stored base64-encoded so the GQL `CONTAINS` operator
+  cannot match raw user terms against them. The fallback is a scoped
+  fetch that pulls visible entities and scans decoded descriptions in
+  Elixir — scoped reads keep the candidate set small enough that the
+  extra pass is cheap, and the function is only used to produce
+  "did you mean?" suggestions on not-found errors.
+  """
   def search_entities(term, visible_scope_paths \\ nil) do
     lowered = escape_gql(String.downcase(term))
-    raw = escape_gql(term)
 
     case GrafeoServer.query(
            "MATCH (e:Entity)-[:IN_SCOPE]->(s:Scope) " <>
              "WHERE e.name CONTAINS '#{lowered}' " <>
-             "OR e.description CONTAINS '#{raw}' " <>
              "RETURN e.namespace, e.name, e.type, e.description, s.path"
          ) do
       {:ok, rows} ->
-        rows = maybe_filter_by_scope(rows, visible_scope_paths)
-
-        Enum.map(rows, fn row ->
-          {row["e.namespace"], row["e.name"]}
-        end)
+        rows
+        |> maybe_filter_by_scope(visible_scope_paths)
+        |> description_matches(term, visible_scope_paths)
+        |> Enum.map(fn row -> {row["e.namespace"], row["e.name"]} end)
         |> Enum.uniq()
 
       {:error, _} ->
+        []
+    end
+  end
+
+  # The name-based query can miss entities whose description mentions the
+  # term but whose name does not. Union in a description scan over the
+  # visible-scope candidate set — same result shape, decoded in Elixir.
+  defp description_matches(name_rows, term, visible_scope_paths) do
+    needle = term |> to_string() |> String.downcase()
+
+    case visible_scope_paths do
+      nil -> name_rows
+      [] -> name_rows
+      _ -> name_rows ++ scan_descriptions(visible_scope_paths, needle)
+    end
+  end
+
+  defp scan_descriptions(visible_scope_paths, needle) do
+    scope_list =
+      Enum.map_join(visible_scope_paths, ", ", fn seg -> "\"#{Enum.join(seg, ":")}\"" end)
+
+    query =
+      "MATCH (e:Entity)-[:IN_SCOPE]->(s:Scope) " <>
+        "WHERE s.path IN [#{scope_list}] " <>
+        "RETURN e.namespace, e.name, e.type, e.description, s.path"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        Enum.filter(rows, fn row ->
+          desc = row["e.description"] |> Codec.decode() |> to_string() |> String.downcase()
+          String.contains?(desc, needle)
+        end)
+
+      _ ->
         []
     end
   end
@@ -323,12 +365,12 @@ defmodule Cqr.Repo.Semantic do
       namespace: first["e.namespace"],
       name: first["e.name"],
       type: first["e.type"],
-      description: first["e.description"],
+      description: Codec.decode(first["e.description"]),
       owner: first["e.owner"],
       reputation: first["e.reputation"],
       freshness_hours_ago: first["e.freshness_hours_ago"],
       certified: first["e.certified"],
-      certified_by: nilify_empty(first["e.certified_by"]),
+      certified_by: first["e.certified_by"] |> Codec.decode() |> nilify_empty(),
       certified_at: nilify_empty(first["e.certified_at"]),
       certification_status: nilify_empty(first["e.certification_status"]),
       scopes: scopes
@@ -348,7 +390,7 @@ defmodule Cqr.Repo.Semantic do
       namespace: row["e.namespace"],
       name: row["e.name"],
       type: row["e.type"],
-      description: row["e.description"],
+      description: Codec.decode(row["e.description"]),
       owner: row["e.owner"],
       reputation: row["e.reputation"]
     }

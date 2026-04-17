@@ -13,6 +13,7 @@ defmodule Cqr.Integration.AssertTest do
   use ExUnit.Case
 
   alias Cqr.Engine
+  alias Cqr.Grafeo.Codec
   alias Cqr.Grafeo.Server, as: GrafeoServer
   alias Cqr.Repo.Semantic
 
@@ -282,7 +283,7 @@ defmodule Cqr.Integration.AssertTest do
                )
 
       assert record["r.agent_id"] == "twin:test"
-      assert record["r.intent"] == "Testing ASSERT primitive"
+      assert Codec.decode(record["r.intent"]) == "Testing ASSERT primitive"
       assert record["r.confidence"] == 0.5
       assert record["r.derived_from"] == "entity:product:churn_rate,entity:product:nps"
       assert is_binary(record["r.record_id"])
@@ -374,7 +375,7 @@ defmodule Cqr.Integration.AssertTest do
                    "RETURN e.type, e.description"
                )
 
-      assert description == "Auto-created container for h_case13_root:grp:sub"
+      assert Codec.decode(description) == "Auto-created container for h_case13_root:grp:sub"
     end
 
     test "auto-created intermediates inherit IN_SCOPE from the walk seed" do
