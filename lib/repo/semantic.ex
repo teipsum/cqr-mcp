@@ -6,6 +6,7 @@ defmodule Cqr.Repo.Semantic do
   All queries go through `Cqr.Grafeo.Server.query/1`.
   """
 
+  alias Cqr.Grafeo.Gql
   alias Cqr.Grafeo.Server, as: GrafeoServer
 
   # Hard ceiling on the number of rows a single traversal can materialize.
@@ -338,23 +339,9 @@ defmodule Cqr.Repo.Semantic do
   defp nilify_empty(""), do: nil
   defp nilify_empty(value), do: value
 
-  # Free-text safe quoting for single-quoted GQL literals. Mirrors
-  # `Cqr.Adapter.Grafeo.escape/1` — see that module for why every escape
-  # below is load-bearing. Duplicated here rather than cross-imported so
-  # the read path does not take a compile-time dependency on the adapter.
-  defp escape_gql(nil), do: ""
-
-  defp escape_gql(str) when is_binary(str) do
-    str
-    |> String.replace("\\", "\\\\")
-    |> String.replace("'", "\\'")
-    |> String.replace("\n", "\\n")
-    |> String.replace("\r", "\\r")
-    |> String.replace("\t", "\\t")
-    |> String.replace("\0", "")
-  end
-
-  defp escape_gql(other), do: escape_gql(to_string(other))
+  # Delegate to the shared escape so a future regression to single-
+  # quote-only escaping cannot diverge read-path and write-path quoting.
+  defp escape_gql(value), do: Gql.escape(value)
 
   defp row_to_entity_summary(row) do
     %{

@@ -18,6 +18,7 @@ defmodule Cqr.Engine.Certify do
   trail the patent describes — every status change is auditable after the fact.
   """
 
+  alias Cqr.Grafeo.Gql
   alias Cqr.Grafeo.Server, as: GrafeoServer
   alias Cqr.Repo.ScopeTree
   alias Cqr.Repo.Semantic
@@ -279,6 +280,10 @@ defmodule Cqr.Engine.Certify do
     end
   end
 
-  defp escape(str) when is_binary(str), do: String.replace(str, "'", "\\'")
-  defp escape(_), do: ""
+  # Delegates to the shared escape. The previous single-quote-only
+  # implementation wrote malformed CertificationRecord nodes for any
+  # entity whose authority or evidence carried a backslash, newline, or
+  # control byte — and those malformed writes were the root cause of
+  # the patent-agent UPDATE hang reported in feature/fix-nif-hang-v2.
+  defp escape(value), do: Gql.escape(value)
 end

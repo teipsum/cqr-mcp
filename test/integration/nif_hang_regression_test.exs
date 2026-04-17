@@ -10,10 +10,21 @@ defmodule Cqr.Integration.NifHangRegressionTest do
   produced malformed GQL and wedged the Rust parser on the DirtyIo
   scheduler — the entire embedded server had to be restarted to recover.
 
+  The second wave of the same bug lived in `Cqr.Engine.Certify.escape/1`,
+  which was still single-quote-only after the adapter was fixed. Every
+  CertificationRecord written with a backslash or newline in authority or
+  evidence produced malformed nodes; a subsequent UPDATE redefinition on
+  the same entity (which writes the full previous-description snapshot
+  into a VersionRecord plus the proposed description in a single INSERT
+  of ~2× the original payload) was the trigger that finally wedged the
+  NIF.
+
   These tests exercise the full parser → engine → adapter → NIF write
-  path with payloads that would have hit the old bug, plus the read
+  path with payloads that would have hit either bug, plus the read
   path (RESOLVE on a missing entity) that used to queue behind the
-  wedged mailbox.
+  wedged mailbox, plus the full ASSERT → CERTIFY(×3) → UPDATE
+  redefinition lifecycle on a hierarchical entity — the shape that
+  reproduced the original report.
 
   The CQR parser uses `"` as the DESCRIPTION/EVIDENCE delimiter, so
   payloads here deliberately avoid literal double quotes — the bug
@@ -23,6 +34,7 @@ defmodule Cqr.Integration.NifHangRegressionTest do
   use ExUnit.Case, async: false
 
   alias Cqr.Engine
+  alias Cqr.Grafeo.Gql
   alias Cqr.Grafeo.Server, as: GrafeoServer
 
   @product_context %{scope: ["company", "product"], agent_id: "twin:nif_hang"}
@@ -38,23 +50,47 @@ defmodule Cqr.Integration.NifHangRegressionTest do
   defp cleanup do
     GrafeoServer.query("MATCH (e:Entity {namespace: '#{@namespace}'})-[r]-() DELETE r")
     GrafeoServer.query("MATCH (e:Entity {namespace: '#{@namespace}'}) DELETE e")
+
+    GrafeoServer.query("MATCH (e:Entity {namespace: '#{@namespace}:patent'})-[r]-() DELETE r")
+
+    GrafeoServer.query("MATCH (e:Entity {namespace: '#{@namespace}:patent'}) DELETE e")
     GrafeoServer.query("MATCH (r:AssertionRecord {entity_namespace: '#{@namespace}'}) DELETE r")
     GrafeoServer.query("MATCH (r:VersionRecord {entity_namespace: '#{@namespace}'}) DELETE r")
+
+    GrafeoServer.query(
+      "MATCH (r:VersionRecord {entity_namespace: '#{@namespace}:patent'}) DELETE r"
+    )
+
+    GrafeoServer.query(
+      "MATCH (r:CertificationRecord {entity_namespace: '#{@namespace}'}) DELETE r"
+    )
+
+    GrafeoServer.query(
+      "MATCH (r:CertificationRecord {entity_namespace: '#{@namespace}:patent'}) DELETE r"
+    )
+
     :ok
   end
 
-  # Build a payload of ~`size` bytes that contains every character class
-  # the old escape fumbled: bare backslashes, embedded single quotes,
-  # newlines, carriage returns, tabs, em-dash, and curly quotes. Double
-  # quotes are intentionally omitted so the CQR parser can carry the
-  # payload unchanged to the adapter. A 5 KB payload of pure ASCII text
+  # Build a payload of ~`size` bytes that contains every character
+  # class the escape pipeline must survive: the four classes the old
+  # adapter escape fumbled (backslash, embedded single quotes, raw
+  # newlines/CRLFs/tabs), UTF-8 punctuation (em-dash, curly quotes),
+  # and the full ASCII punctuation set the user flagged as suspect —
+  # `$ ~ ( ) / + : * # @ % | [ ] { } < > ; ! ? & = ^`. Double quotes
+  # are intentionally omitted so the CQR parser can carry the payload
+  # unchanged to the adapter. A 5 KB payload of pure ASCII text
   # would not have reproduced the hang — the bug needed the unescaped
   # metacharacters.
   defp nasty_payload(size) do
     chunk =
       "Path: C:\\Users\\alice\\notes.txt — she said 'don't forget' " <>
         "and it's important.\n\tIndented line with \r\n CRLF.\n" <>
-        "Smart quotes: \u201cHello\u201d \u2018world\u2019 and em-dash — here.\n"
+        "Smart quotes: \u201cHello\u201d \u2018world\u2019 and em-dash — here.\n" <>
+        "Money $99.95 ~ about 100 USD; rate is +3.5% (approx).\n" <>
+        "Path /usr/local/bin/app with flags -Xmx2g @config.yml #tag %02d\n" <>
+        "Regex [a-z]+ and glob *.ex* and brace {x,y} and <tag> and </tag>\n" <>
+        "Email user@example.com ref #123 && check a|b or a=b; ^caret! ok? 42.\n"
 
     [chunk]
     |> Stream.cycle()
@@ -142,6 +178,81 @@ defmodule Cqr.Integration.NifHangRegressionTest do
     end
   end
 
+  describe "certified-entity redefinition lifecycle on a hierarchical address" do
+    # Reproduces the shape the user reported: a hierarchical entity
+    # (e.g. entity:agent:patent_agent:bootstrap) that has been walked
+    # through the full proposed → under_review → certified lifecycle
+    # with free-text AUTHORITY and EVIDENCE, then receives an UPDATE
+    # redefinition carrying a 5 KB+ payload. The :standard certification
+    # preservation policy routes a redefinition on a certified entity
+    # through the :pending_review write path, which emits a single
+    # INSERT whose body contains both the previous description and the
+    # proposed description — that ~2× payload is the fingerprint of
+    # the production hang. This test MUST complete well inside the 30 s
+    # NIF timeout; a failure here is a real regression.
+    test "full ASSERT + 3× CERTIFY + UPDATE redefinition completes under 30s" do
+      name = "bootstrap"
+      ns = "#{@namespace}:patent"
+      entity_ref = "entity:#{ns}:#{name}"
+
+      original = nasty_payload(5_200)
+      redefinition = nasty_payload(5_200) <> " (revision 2)"
+      long_evidence = "Board review notes:\n" <> nasty_payload(2_000)
+
+      assert_completes_within(30_000, fn ->
+        # ASSERT with the hierarchical address. The adapter cascades
+        # a container entity for `#{@namespace}:patent` as part of this
+        # write, which exercises the multi-ancestor write path.
+        assert {:ok, _} =
+                 Engine.execute(
+                   ~s(ASSERT #{entity_ref} TYPE derived_metric ) <>
+                     ~s(DESCRIPTION "#{original}" ) <>
+                     ~s(INTENT "Hierarchical regression fixture" ) <>
+                     ~s(DERIVED_FROM entity:product:churn_rate),
+                   @product_context
+                 )
+
+        # proposed → under_review → certified. Each CERTIFY writes a
+        # CertificationRecord whose evidence and authority previously
+        # bypassed the shared escape function.
+        for status <- ["proposed", "under_review", "certified"] do
+          assert {:ok, _} =
+                   Engine.execute(
+                     ~s(CERTIFY #{entity_ref} STATUS #{status} ) <>
+                       ~s(AUTHORITY "authority:review_board:stage:#{status}" ) <>
+                       ~s(EVIDENCE "#{long_evidence}"),
+                     @product_context
+                   )
+        end
+
+        # Redefinition on a certified entity — routes through the
+        # :pending_review path, which writes a VersionRecord holding
+        # both `previous_description` (~5 KB) and `proposed_description`
+        # (~5 KB) in a single INSERT. This is the worst-case stress
+        # test the production bug triggered.
+        assert {:ok, _} =
+                 Engine.execute(
+                   ~s(UPDATE #{entity_ref} CHANGE_TYPE redefinition ) <>
+                     ~s(DESCRIPTION "#{redefinition}" ) <>
+                     ~s(EVIDENCE "#{long_evidence}"),
+                   @product_context
+                 )
+      end)
+
+      # Post-lifecycle sanity: a simple RESOLVE on an unrelated entity
+      # must still return promptly. If the Grafeo NIF had wedged on any
+      # of the writes above, this read would hang behind the stuck
+      # dirty-scheduler thread.
+      assert_completes_within(2_000, fn ->
+        assert {:ok, _} =
+                 Engine.execute(
+                   "RESOLVE entity:product:churn_rate",
+                   @product_context
+                 )
+      end)
+    end
+  end
+
   describe "round-trip fidelity for individual metacharacter classes" do
     # Each case isolates one character class so a future regression in
     # the escape function fingerprints precisely which escape pass broke.
@@ -157,7 +268,10 @@ defmodule Cqr.Integration.NifHangRegressionTest do
           {"em_dash", "clause one — clause two"},
           {"curly_quotes", "\u201csmart\u201d \u2018quotes\u2019"},
           {"trailing_backslash", "ends with a backslash\\"},
-          {"mixed", "it's\nC:\\tmp\\log — \u201chello\u201d"}
+          {"mixed", "it's\nC:\\tmp\\log — \u201chello\u201d"},
+          {"shell_metas", "cmd $VAR ~ok /path * & | ; < > ="},
+          {"brackets_braces", "[a] {b} (c) <d> matches"},
+          {"punctuation_misc", "rate +3% @home #42 ?maybe !sure ^caret"}
         ] do
       test "ASSERT round-trips #{label}" do
         name = "rt_#{unquote(label)}"
@@ -179,6 +293,33 @@ defmodule Cqr.Integration.NifHangRegressionTest do
 
         assert [%{description: ^payload}] = resolved.data
       end
+    end
+  end
+
+  describe "Cqr.Grafeo.Gql.escape/1" do
+    # Unit coverage for the shared escape function. The write-path
+    # regression tests above exercise it end-to-end; these pin the
+    # contract so a future refactor that broadened the strip set (or
+    # rolled back to single-quote-only) trips immediately.
+    test "escapes backslash, single quote, and C0 whitespace escapes" do
+      assert Gql.escape("a'b\\c\nd\re\tf") == "a\\'b\\\\c\\nd\\re\\tf"
+    end
+
+    test "drops null bytes and other C0 controls including DEL" do
+      raw = <<"a", 0x00, "b", 0x01, "c", 0x08, "d", 0x0B, "e", 0x1F, "f", 0x7F, "g">>
+      assert Gql.escape(raw) == "abcdefg"
+    end
+
+    test "preserves multibyte UTF-8 sequences" do
+      # em-dash (U+2014), curly-quote (U+201C), CJK — all multibyte,
+      # none should touch the C0 strip pass.
+      assert Gql.escape("— \u201chi\u201d 日") == "— \u201chi\u201d 日"
+    end
+
+    test "coerces nil to empty and other terms via to_string/1" do
+      assert Gql.escape(nil) == ""
+      assert Gql.escape(42) == "42"
+      assert Gql.escape(:atom_value) == "atom_value"
     end
   end
 
@@ -222,10 +363,33 @@ defmodule Cqr.Integration.NifHangRegressionTest do
     end
   end
 
+  describe "Cqr.Grafeo.Server.run_with_timeout/2" do
+    # The timeout wrapper is the last line of defence if a malformed
+    # query slips past the escape pipeline. These tests pin the
+    # contract without relying on an actually-hung NIF, so the
+    # regression surface stays observable even if the NIF's behaviour
+    # under pathological input changes over time.
+    test "returns :nif_timeout when the callable exceeds the budget" do
+      assert {:error, :nif_timeout} =
+               GrafeoServer.run_with_timeout(50, fn ->
+                 Process.sleep(500)
+                 :should_not_be_returned
+               end)
+    end
+
+    test "returns the callable's value when it finishes inside the budget" do
+      assert {:ok, 7} = GrafeoServer.run_with_timeout(500, fn -> {:ok, 7} end)
+      assert :done = GrafeoServer.run_with_timeout(500, fn -> :done end)
+    end
+  end
+
   # Run `fun` inside a Task so we can surface a hang as a plain test
-  # failure instead of waiting for the ExUnit case timeout. 5 s is
-  # deliberately well inside the configured NIF timeout (30 s) so we
-  # are testing the write path, not the timeout wrapper.
+  # failure instead of waiting for the ExUnit case timeout. The outer
+  # budget for most cases is 5 s (well inside the configured NIF
+  # timeout of 30 s), so we are testing the write path, not the
+  # timeout wrapper. The certified-entity lifecycle test uses a
+  # 30 s budget because the specific production hang was reported
+  # at "hangs indefinitely past 30 seconds".
   defp assert_completes_within(timeout_ms, fun) do
     task = Task.async(fun)
 

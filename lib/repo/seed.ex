@@ -8,6 +8,7 @@ defmodule Cqr.Repo.Seed do
   See PROJECT_KNOWLEDGE.md Section 10 for the dataset specification.
   """
 
+  alias Cqr.Grafeo.Gql
   alias Cqr.Grafeo.Native
 
   require Logger
@@ -354,19 +355,5 @@ defmodule Cqr.Repo.Seed do
     end
   end
 
-  # See `Cqr.Adapter.Grafeo.escape/1` for the full rationale. Kept in sync
-  # so seed payloads with backslashes or newlines do not wedge the NIF.
-  defp escape(nil), do: ""
-
-  defp escape(str) when is_binary(str) do
-    str
-    |> String.replace("\\", "\\\\")
-    |> String.replace("'", "\\'")
-    |> String.replace("\n", "\\n")
-    |> String.replace("\r", "\\r")
-    |> String.replace("\t", "\\t")
-    |> String.replace("\0", "")
-  end
-
-  defp escape(other), do: escape(to_string(other))
+  defp escape(value), do: Gql.escape(value)
 end
