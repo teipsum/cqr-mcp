@@ -8,7 +8,7 @@ defmodule Cqr.Repo.Seed do
   See PROJECT_KNOWLEDGE.md Section 10 for the dataset specification.
   """
 
-  alias Cqr.Grafeo.Gql
+  alias Cqr.Grafeo.Codec
   alias Cqr.Grafeo.Native
 
   require Logger
@@ -92,7 +92,7 @@ defmodule Cqr.Repo.Seed do
       db,
       "INSERT (:Entity {" <>
         "namespace: 'project', name: 'bootstrap', type: 'definition', " <>
-        "description: '#{escape(desc)}', owner: 'system', " <>
+        "description: '#{Codec.encode(desc)}', owner: 'system', " <>
         "reputation: 0.5, freshness_hours_ago: 0, certified: false, " <>
         "embedding: #{embedding_literal}})"
     )
@@ -207,7 +207,7 @@ defmodule Cqr.Repo.Seed do
         db,
         "INSERT (:Entity {" <>
           "namespace: '#{ns}', name: '#{name}', type: '#{type}', " <>
-          "description: '#{escape(desc)}', owner: '#{owner}', " <>
+          "description: '#{Codec.encode(desc)}', owner: '#{owner}', " <>
           "reputation: #{reputation}, freshness_hours_ago: #{freshness_h}, " <>
           "certified: false, embedding: #{embedding_literal}})"
       )
@@ -354,6 +354,4 @@ defmodule Cqr.Repo.Seed do
       {:error, reason} -> raise "Seed query failed: #{reason}\nQuery: #{query}"
     end
   end
-
-  defp escape(value), do: Gql.escape(value)
 end

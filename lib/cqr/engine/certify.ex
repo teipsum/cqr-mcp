@@ -18,6 +18,7 @@ defmodule Cqr.Engine.Certify do
   trail the patent describes — every status change is auditable after the fact.
   """
 
+  alias Cqr.Grafeo.Codec
   alias Cqr.Grafeo.Gql
   alias Cqr.Grafeo.Server, as: GrafeoServer
   alias Cqr.Repo.ScopeTree
@@ -166,8 +167,8 @@ defmodule Cqr.Engine.Certify do
         "previous_status: '#{previous}', " <>
         "new_status: '#{certify.status}', " <>
         "agent_id: '#{escape(agent_id)}', " <>
-        "authority: '#{escape(authority)}', " <>
-        "evidence: '#{escape(evidence)}', " <>
+        "authority: '#{Codec.encode(authority)}', " <>
+        "evidence: '#{Codec.encode(evidence)}', " <>
         "timestamp: '#{timestamp}'" <>
         "})"
 
@@ -210,7 +211,7 @@ defmodule Cqr.Engine.Certify do
     authority = certify.authority || ""
 
     [
-      "e.certified_by = '#{escape(authority)}'",
+      "e.certified_by = '#{Codec.encode(authority)}'",
       "e.certified_at = '#{timestamp}'"
     ]
   end

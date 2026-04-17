@@ -10,6 +10,7 @@ defmodule Cqr.Adapter.Grafeo do
 
   @behaviour Cqr.Adapter.Behaviour
 
+  alias Cqr.Grafeo.Codec
   alias Cqr.Grafeo.Gql
   alias Cqr.Grafeo.Server, as: GrafeoServer
   alias Cqr.Repo.Seed
@@ -212,7 +213,7 @@ defmodule Cqr.Adapter.Grafeo do
       namespace: row["#{alias_prefix}.namespace"],
       name: row["#{alias_prefix}.name"],
       type: row["#{alias_prefix}.type"],
-      description: row["#{alias_prefix}.description"],
+      description: Codec.decode(row["#{alias_prefix}.description"]),
       owner: row["#{alias_prefix}.owner"],
       reputation: row["#{alias_prefix}.reputation"],
       certified: row["#{alias_prefix}.certified"],
@@ -357,9 +358,12 @@ defmodule Cqr.Adapter.Grafeo do
   # Simple case-insensitive substring count across name + description.
   # This stands in for BM25 since Grafeo v0.5 exposes no fulltext
   # procedure. Score = (name hits * 2) + (description hits).
+  #
+  # Description is stored base64-encoded (see `Cqr.Grafeo.Codec`);
+  # decode before scoring so substring matching sees the raw user text.
   defp text_relevance(row, normalized_term) do
     name = String.downcase(row["e.name"] || "")
-    desc = String.downcase(row["e.description"] || "")
+    desc = row["e.description"] |> Codec.decode() |> to_string() |> String.downcase()
 
     name_hits = substring_count(name, normalized_term)
     desc_hits = substring_count(desc, normalized_term)
@@ -460,7 +464,7 @@ defmodule Cqr.Adapter.Grafeo do
       namespace: row["e.namespace"],
       name: row["e.name"],
       type: row["e.type"],
-      description: row["e.description"],
+      description: Codec.decode(row["e.description"]),
       owner: row["e.owner"],
       reputation: row["e.reputation"],
       certified: row["e.certified"],
@@ -706,12 +710,12 @@ defmodule Cqr.Adapter.Grafeo do
       "INSERT (:Entity {" <>
         "namespace: '#{ns}', name: '#{name}', " <>
         "type: '#{escape(expression.type)}', " <>
-        "description: '#{escape(expression.description)}', " <>
+        "description: '#{Codec.encode(expression.description)}', " <>
         "certified: false, " <>
         "confidence: #{confidence}, " <>
         "asserted_by: '#{escape(agent_id)}', " <>
         "asserted_at: '#{now}', " <>
-        "intent: '#{escape(expression.intent)}', " <>
+        "intent: '#{Codec.encode(expression.intent)}', " <>
         "owner: '#{escape(agent_id)}', " <>
         "reputation: #{reputation}, " <>
         "freshness_hours_ago: 0, " <>
@@ -806,10 +810,10 @@ defmodule Cqr.Adapter.Grafeo do
         "entity_namespace: '#{ns}', entity_name: '#{name}', " <>
         "agent_id: '#{escape(agent_id)}', " <>
         "timestamp: '#{now}', " <>
-        "intent: '#{escape(expression.intent)}', " <>
+        "intent: '#{Codec.encode(expression.intent)}', " <>
         "confidence: #{confidence}, " <>
         "derived_from: '#{escape(derived_from_str)}', " <>
-        "expression_text: '#{escape(expression_text)}'" <>
+        "expression_text: '#{Codec.encode(expression_text)}'" <>
         "})"
 
     exec_write(query)
@@ -993,7 +997,7 @@ defmodule Cqr.Adapter.Grafeo do
       "INSERT (:Entity {" <>
         "namespace: '#{ns}', name: '#{name}', " <>
         "type: 'container', " <>
-        "description: '#{escape(description)}', " <>
+        "description: '#{Codec.encode(description)}', " <>
         "certified: false, " <>
         "confidence: 1.0, " <>
         "asserted_by: '#{escape(agent_id)}', " <>
@@ -1268,7 +1272,7 @@ defmodule Cqr.Adapter.Grafeo do
            record_id: row["ar.record_id"],
            asserted_at: row["ar.timestamp"],
            asserted_by: row["ar.agent_id"],
-           intent: row["ar.intent"],
+           intent: Codec.decode(row["ar.intent"]),
            confidence: row["ar.confidence"],
            derived_from: split_derived_from(row["ar.derived_from"])
          }}
@@ -1304,8 +1308,8 @@ defmodule Cqr.Adapter.Grafeo do
               from_status: nilify_empty(row["cr.previous_status"]),
               to_status: row["cr.new_status"],
               agent: row["cr.agent_id"],
-              authority: nilify_empty(row["cr.authority"]),
-              evidence: nilify_empty(row["cr.evidence"])
+              authority: row["cr.authority"] |> Codec.decode() |> nilify_empty(),
+              evidence: row["cr.evidence"] |> Codec.decode() |> nilify_empty()
             }
           end)
           |> Enum.sort_by(& &1.timestamp)
@@ -1334,7 +1338,7 @@ defmodule Cqr.Adapter.Grafeo do
               agent: row["sr.agent_id"],
               previous_reputation: row["sr.previous_reputation"],
               new_reputation: row["sr.new_reputation"],
-              evidence: nilify_empty(row["sr.evidence"])
+              evidence: row["sr.evidence"] |> Codec.decode() |> nilify_empty()
             }
           end)
           |> Enum.sort_by(& &1.timestamp)
@@ -1363,8 +1367,9 @@ defmodule Cqr.Adapter.Grafeo do
               timestamp: row["vr.timestamp"],
               agent: row["vr.agent_id"],
               change_type: row["vr.change_type"],
-              evidence: nilify_empty(row["vr.evidence"]),
-              previous_description: nilify_empty(row["vr.previous_description"]),
+              evidence: row["vr.evidence"] |> Codec.decode() |> nilify_empty(),
+              previous_description:
+                row["vr.previous_description"] |> Codec.decode() |> nilify_empty(),
               previous_type: nilify_empty(row["vr.previous_type"]),
               previous_status: nilify_empty(row["vr.previous_status"]),
               previous_reputation: row["vr.previous_reputation"],
@@ -1558,7 +1563,7 @@ defmodule Cqr.Adapter.Grafeo do
         "agent_id: '#{escape(agent_id)}', " <>
         "previous_reputation: #{previous_val}, " <>
         "new_reputation: #{signal.score}, " <>
-        "evidence: '#{escape(signal.evidence)}', " <>
+        "evidence: '#{Codec.encode(signal.evidence)}', " <>
         "timestamp: '#{timestamp}'" <>
         "})"
 
@@ -1599,7 +1604,7 @@ defmodule Cqr.Adapter.Grafeo do
             %{
               entity: Cqr.Types.format_entity({row["e.namespace"], row["e.name"]}),
               type: row["e.type"],
-              description: row["e.description"],
+              description: Codec.decode(row["e.description"]),
               owner: row["e.owner"],
               freshness_hours_ago: freshness,
               threshold_exceeded_by: max(freshness - threshold_hours, 0),
@@ -1728,7 +1733,7 @@ defmodule Cqr.Adapter.Grafeo do
              kind: :assertion,
              agent_id: row["ar.agent_id"],
              timestamp: row["ar.timestamp"],
-             intent: nilify_empty(row["ar.intent"]),
+             intent: row["ar.intent"] |> Codec.decode() |> nilify_empty(),
              entity: Cqr.Types.format_entity({row["e.namespace"], row["e.name"]})
            }
          end)}
@@ -1758,7 +1763,7 @@ defmodule Cqr.Adapter.Grafeo do
              timestamp: row["cr.timestamp"],
              from_status: nilify_empty(row["cr.previous_status"]),
              to_status: row["cr.new_status"],
-             authority: nilify_empty(row["cr.authority"]),
+             authority: row["cr.authority"] |> Codec.decode() |> nilify_empty(),
              entity: Cqr.Types.format_entity({row["e.namespace"], row["e.name"]})
            }
          end)}
@@ -1788,7 +1793,7 @@ defmodule Cqr.Adapter.Grafeo do
              timestamp: row["sr.timestamp"],
              previous_reputation: row["sr.previous_reputation"],
              new_reputation: row["sr.new_reputation"],
-             evidence: nilify_empty(row["sr.evidence"]),
+             evidence: row["sr.evidence"] |> Codec.decode() |> nilify_empty(),
              entity: Cqr.Types.format_entity({row["e.namespace"], row["e.name"]})
            }
          end)}
@@ -2711,9 +2716,9 @@ defmodule Cqr.Adapter.Grafeo do
         "entity_namespace: '#{ns}', entity_name: '#{name}', " <>
         "agent_id: '#{escape(agent_id)}', " <>
         "change_type: '#{expression.change_type}', " <>
-        "evidence: '#{escape(expression.evidence)}', " <>
+        "evidence: '#{Codec.encode(expression.evidence)}', " <>
         "status: 'applied', " <>
-        "previous_description: '#{escape(snapshot.description)}', " <>
+        "previous_description: '#{Codec.encode(snapshot.description)}', " <>
         "previous_type: '#{escape(snapshot.type)}', " <>
         "previous_status: '#{status_to_string(snapshot.status)}', " <>
         "previous_reputation: #{snapshot.reputation || 0.0}, " <>
@@ -2741,14 +2746,14 @@ defmodule Cqr.Adapter.Grafeo do
         "entity_namespace: '#{ns}', entity_name: '#{name}', " <>
         "agent_id: '#{escape(agent_id)}', " <>
         "change_type: '#{expression.change_type}', " <>
-        "evidence: '#{escape(expression.evidence)}', " <>
+        "evidence: '#{Codec.encode(expression.evidence)}', " <>
         "status: 'pending_review', " <>
-        "previous_description: '#{escape(snapshot.description)}', " <>
+        "previous_description: '#{Codec.encode(snapshot.description)}', " <>
         "previous_type: '#{escape(snapshot.type)}', " <>
         "previous_status: '#{status_to_string(snapshot.status)}', " <>
         "previous_reputation: #{snapshot.reputation || 0.0}, " <>
         "previous_confidence: #{snapshot.confidence || 0.0}, " <>
-        "proposed_description: '#{escape(proposed_desc)}', " <>
+        "proposed_description: '#{Codec.encode(proposed_desc)}', " <>
         "proposed_type: '#{escape(proposed_type)}', " <>
         "proposed_confidence: #{proposed_conf}, " <>
         "timestamp: '#{timestamp}'" <>
@@ -2787,7 +2792,7 @@ defmodule Cqr.Adapter.Grafeo do
 
     sets =
       if expression.description,
-        do: ["e.description = '#{escape(expression.description)}'" | sets],
+        do: ["e.description = '#{Codec.encode(expression.description)}'" | sets],
         else: sets
 
     sets =
@@ -2849,7 +2854,7 @@ defmodule Cqr.Adapter.Grafeo do
         "new_status: 'contested', " <>
         "agent_id: '#{escape(agent_id)}', " <>
         "authority: '', " <>
-        "evidence: '#{escape(evidence_text)}', " <>
+        "evidence: '#{Codec.encode(evidence_text)}', " <>
         "timestamp: '#{timestamp}'" <>
         "})"
 
