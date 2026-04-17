@@ -45,14 +45,14 @@ defmodule Cqr.Adapter.Grafeo do
         {:ok, result}
 
       {:error, :not_found} ->
-        similar = Semantic.search_entities(elem(entity, 1), visible)
+        similar = []  # search_entities hangs on corrupted descriptions; skip suggestions
 
         {:error, Cqr.Error.entity_not_found(Cqr.Types.format_entity(entity), similar: similar)}
 
       {:error, :not_visible} ->
         {:error,
          Cqr.Error.entity_not_found(Cqr.Types.format_entity(entity),
-           similar: Semantic.search_entities(elem(entity, 1), visible)
+           similar: []
          )}
 
       {:error, reason} ->
