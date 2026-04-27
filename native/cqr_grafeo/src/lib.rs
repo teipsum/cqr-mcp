@@ -122,7 +122,7 @@ fn health_check(resource: ResourceArc<GrafeoResource>) -> NifResult<(Atom, Strin
         .map_err(|_| rustler::Error::Term(Box::new("Mutex poisoned")))?;
 
     match guard.as_ref() {
-        Some(_) => Ok((atoms::ok(), "grafeo 0.5.34".to_string())),
+        Some(_) => Ok((atoms::ok(), "grafeo 0.5.40".to_string())),
         None => Err(rustler::Error::Term(Box::new("Database closed"))),
     }
 }
@@ -136,7 +136,7 @@ fn query_result_to_term<'a>(
     result: &grafeo::QueryResult,
 ) -> Term<'a> {
     let rows: Vec<Term<'a>> = result
-        .rows
+        .rows()
         .iter()
         .map(|row| {
             let pairs: Vec<(Term<'a>, Term<'a>)> = row
