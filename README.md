@@ -34,8 +34,11 @@ Ten minutes, zero external dependencies.
 git clone https://github.com/teipsum/cqr-mcp.git
 cd cqr-mcp
 mix deps.get
+mix compile
 ./bin/cqr --persist
 ```
+
+The first `mix compile` downloads the precompiled Grafeo NIF and compiles all Elixir modules. Run it once before connecting an MCP client — the NIF download and initial compile can take 20-30 seconds, which exceeds the startup timeout of most MCP clients including Claude Desktop.
 
 On first boot the embedded Grafeo database is created, the scope hierarchy is bootstrapped, and the server begins listening on stdio for MCP connections and on `http://localhost:4000` for SSE/HTTP clients.
 
