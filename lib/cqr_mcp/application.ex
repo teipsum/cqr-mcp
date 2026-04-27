@@ -2,10 +2,21 @@ defmodule CqrMcp.Application do
   @moduledoc """
   OTP application entry point for the CQR MCP server.
 
-  Boots the supervision tree (embedded Grafeo NIF server, scope tree cache,
-  MCP transport server) under a `:one_for_one` strategy and registers a
+  Boots the supervision tree under a `:one_for_one` strategy and registers a
   session identity in `:persistent_term` so `cqr://session` can serve it
   without a process hop.
+
+  ## Modes
+
+    * **Standalone** (default) -- CQR owns the Grafeo database and hosts its
+      own MCP SSE transport. This is the normal mode when running `cqr_mcp`
+      as a standalone OS process.
+
+    * **Embedded** (`config :cqr_mcp, :embedded, true`) -- the host
+      application (e.g. UNICA) owns the Grafeo database and MCP transport.
+      CQR starts only library infrastructure (scope-tree cache, MCP tool
+      server, SSE registry) and exposes `Cqr.Engine.execute/2` as a pure
+      library call.
   """
 
   use Application
@@ -14,18 +25,41 @@ defmodule CqrMcp.Application do
   def start(_type, _args) do
     register_session()
 
+    children =
+      if embedded_mode?() do
+        library_children()
+      else
+        standalone_children()
+      end
+
+    opts = [strategy: :one_for_one, name: CqrMcp.Supervisor]
+    Supervisor.start_link(children, opts)
+  end
+
+  @doc false
+  def children_for_mode(:embedded), do: library_children()
+  def children_for_mode(:standalone), do: standalone_children()
+
+  defp standalone_children do
     {storage, seed, reset} = parse_storage_args(System.argv())
 
-    children = [
-      {Cqr.Grafeo.Server, storage: storage, seed: seed, reset: reset},
+    [
+      {Cqr.Grafeo.Server, storage: storage, seed: seed, reset: reset}
+      | library_children()
+    ]
+  end
+
+  defp library_children do
+    [
       Cqr.Repo.ScopeTree,
       CqrMcp.Server,
       {Registry, keys: :duplicate, name: CqrMcp.SSE.Registry},
       {Bandit, plug: CqrMcp.SSE.Router, port: sse_port()}
     ]
+  end
 
-    opts = [strategy: :one_for_one, name: CqrMcp.Supervisor]
-    Supervisor.start_link(children, opts)
+  defp embedded_mode? do
+    Application.get_env(:cqr_mcp, :embedded, false)
   end
 
   # Port for the MCP SSE/HTTP transport. Resolution order:

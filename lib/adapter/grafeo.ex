@@ -45,7 +45,8 @@ defmodule Cqr.Adapter.Grafeo do
         {:ok, result}
 
       {:error, :not_found} ->
-        similar = []  # search_entities hangs on corrupted descriptions; skip suggestions
+        # search_entities hangs on corrupted descriptions; skip suggestions
+        similar = []
 
         {:error, Cqr.Error.entity_not_found(Cqr.Types.format_entity(entity), similar: similar)}
 
