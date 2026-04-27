@@ -20,6 +20,7 @@ defmodule Cqr.Grafeo.Server do
 
   alias Cqr.Grafeo.Native
   alias Cqr.Repo.Seed
+  alias Cqr.Repo.InstallSeed
 
   require Logger
 
@@ -131,7 +132,7 @@ defmodule Cqr.Grafeo.Server do
             Seed.seed_if_empty_direct(db)
 
           match?({:path, _}, storage) ->
-            Seed.bootstrap_if_empty_direct(db)
+            InstallSeed.seed_if_empty_direct(db)
 
           true ->
             :ok

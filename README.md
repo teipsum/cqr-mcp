@@ -42,6 +42,20 @@ The first `mix compile` downloads the precompiled Grafeo NIF and compiles all El
 
 On first boot the embedded Grafeo database is created, the scope hierarchy is bootstrapped, and the server begins listening on stdio for MCP connections and on `http://localhost:4000` for SSE/HTTP clients.
 
+### First-Time Setup
+
+On first boot the database is empty except for the universal protocols (`entity:agent:default`, `entity:governance:relationship_guide`, `entity:governance:assertion_protocol`) and a guided installer entity (`entity:install:setup`).
+
+To configure CQR for your organization, connect a Claude Desktop (or other MCP client) to the running server and start a new conversation with this single prompt:
+
+> CQR resolve entity:install:setup
+
+The installer will ask you four questions about your organization, the agent roles you want to set up, and the queries each agent should answer. It then asserts the org structure, agent identities, and structural reference nodes for each role directly into the graph. The conversation takes about five minutes.
+
+When setup completes, the installer hands you activation prompts for each agent. Open a new conversation per agent and paste its activation prompt to start working with it.
+
+You can re-run `cqr_resolve entity:install:setup` at any time to add more agents — it detects completed setup and offers to add a single agent without re-running the full conversation.
+
 ### Precompiled NIFs
 
 The Grafeo NIF is shipped as a precompiled binary via [`rustler_precompiled`](https://hex.pm/packages/rustler_precompiled). Apple Silicon (`aarch64-apple-darwin`), Linux x86_64, and Linux ARM64 users get a ready-to-run binary on `mix deps.get` — no Rust toolchain required. Other targets fall back to building from source; install Rust via [rustup](https://rustup.rs/) and set `CQR_BUILD_NIF=true` if you need to rebuild from source on a supported target.
