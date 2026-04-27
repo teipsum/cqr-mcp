@@ -15,6 +15,8 @@ You have just resolved this entity, which means you are entering a CQR knowledge
 
 CQR (Contextual Query Resolution) is a graph-based protocol for governed organizational knowledge. You have access to twelve primitives via MCP tools: `cqr_resolve`, `cqr_discover`, `cqr_assert`, `cqr_assert_batch`, `cqr_certify`, `cqr_signal`, `cqr_trace`, `cqr_refresh`, `cqr_compare`, `cqr_hypothesize`, `cqr_anchor`, and `cqr_awareness`. Each one operates on entities — semantically addressed nodes in a knowledge graph — with full audit trails, scope-based access control, and quality metadata (confidence, certification status, reputation, freshness).
 
+If your CQR tools are not yet loaded in this conversation, run `tool_search` with the query `cqr` to load them before continuing. The CQR tools are deferred and need a search to attach.
+
 ## The Two-Bootstrap Sequence
 
 CQR agents are ephemeral. Every conversation is a cold start. Every session begins with zero context outside what is written in this graph. That makes the bootstrap sequence load-bearing:
@@ -82,7 +84,7 @@ The relational-database instinct is to treat namespace hierarchy as folders: "I'
 
 Instead: **model your domain as entities connected by typed relationships, anchored by shared reference nodes.**
 
-Example, sales: a real-world deal is a single entity (`entity:sales:deal:acme_q3_platform`). It is related to a customer entity, a current pipeline stage entity, the people involved, and the artifacts produced. When the deal advances, you assert a new IN_STAGE relationship to a different stage entity — the old one stays as history, giving you a natural audit trail. Pipeline stages are shared reference nodes (`entity:sales:stage:qualified`, `entity:sales:stage:negotiation`) that real-world deals relate TO. They are not category folders that deals get filed INTO.
+Example, sales: a real-world deal is a single entity (`entity:sales:deal:acme_q3_platform`). It is related to a customer entity, a current pipeline stage entity, the people involved, and the artifacts produced. When the deal advances, you assert a new DEPENDS_ON relationship to a different stage entity — the old DEPENDS_ON stays as history, giving you a natural audit trail. Pipeline stages are shared reference nodes (`entity:sales:stage:qualified`, `entity:sales:stage:negotiation`) that real-world deals relate TO. They are not category folders that deals get filed INTO.
 
 Your specialist bootstrap will teach you the structural reference nodes for your specific domain. Use them as anchors. Create real-world entities for actual things — customers, projects, decisions, observations — and connect them via typed relationships. The graph grows organically through connections, not through filing.
 

@@ -1,5 +1,5 @@
 ---
-entity: entity:agent:default:coordination
+entity: entity:coordination:roster
 type: definition
 scope: scope:company
 owner: cqr-mcp
@@ -18,7 +18,7 @@ This entity is the canonical roster of specialist agents in this CQR knowledge g
 
 No specialist agents are configured yet. This graph is in its initial state — only the universal protocols and the installer entity exist.
 
-To set up specialist agents, RESOLVE `entity:install:setup` and follow the guided setup. The installer will ask 4-5 questions about your organization and the roles you need, then assert agent identities, specialist bootstraps, and structural reference nodes for each role you choose. When setup completes, this entity will be UPDATEd with the agent roster.
+To set up specialist agents, RESOLVE `entity:install:setup` and follow the guided setup. The installer will ask 4 questions about your organization and the roles you need, then assert agent identities, specialist bootstraps, and structural reference nodes for each role you choose. When setup completes, this entity will be UPDATEd with the agent roster.
 
 If you are an agent that has just bootstrapped and you find this roster empty, you are likely the first agent in this graph. Either the user is testing CQR before running the installer, or they intend you to operate as a generic agent. Proceed with the user's request; do not assume specialist agents exist that have not been declared here.
 

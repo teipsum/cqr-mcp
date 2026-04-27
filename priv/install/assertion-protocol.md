@@ -52,6 +52,12 @@ The engine checks the description of every new assertion against existing entiti
 
 This is a soft check — it catches obvious duplicates ("ACME Corp" and "Acme Corp"), not semantic ones ("our biggest customer" and "ACME Corp"). The deeper protection against duplicates is orient-before-assert: if you DISCOVER and RESOLVE before writing, you find existing entities yourself and either supersede them deliberately or skip the write.
 
+### Targets must exist
+
+Every relationship target named in your `relationships` field must already exist in the graph at write time. The engine validates each target before accepting the write. If you list a relationship to an entity that hasn't been asserted yet, the engine rejects the entire assertion.
+
+This matters most for batched assertions: `cqr_assert_batch` does NOT pre-create all entities first. Within a single batch, each entity is asserted in array order. If entity #5 lists a relationship to entity #7 (still pending), the assertion fails. Order entities within a batch so that relationship targets always come earlier in the array than the entities that reference them. For circular references, split into two calls: assert the entities first with relationships only to already-existing targets, then issue follow-up updates to add the cross-references.
+
 ## What You Maintain by Convention
 
 The following are not enforced by the engine. They are practices that distinguish a useful graph from a noisy one.
@@ -86,6 +92,18 @@ The batch call accepts an array of entity objects with the same fields as `cqr_a
 
 This is mostly a performance and token-efficiency optimization, but it has a coordination benefit too: a related set of entities all carrying the same intent and asserted in a single call read more clearly in audit history than the same set spread across many individual writes.
 
+### Updates use `cqr_update`, not `cqr_assert`
+
+When you need to evolve an entity that already exists — replacing its description, refreshing its content, changing its type — use `cqr_update` with the appropriate `change_type`:
+
+- `correction` — fixing a factual error
+- `refresh` — updating to current state without changing meaning
+- `redefinition` — changing the entity's meaning, e.g. replacing an empty placeholder with substantive content
+- `scope_change` — moving the entity to a different scope
+- `reclassification` — changing the entity type
+
+Calling `cqr_assert` on an entity that already exists returns an "already exists" error. The engine wants every change to be explicitly categorized so the audit trail captures the semantic intent of the update, not just the new content.
+
 ### Type discipline
 
 CQR has six entity types: `metric`, `definition`, `policy`, `derived_metric`, `observation`, and `recommendation`. They are not interchangeable.
@@ -116,9 +134,10 @@ Engine rejections come back as structured errors with a reason. Common reasons a
 
 - **Insufficient relationship density.** You have fewer than 3 typed relationships. Run more orientation queries, find genuine connections, retry.
 - **Missing intent or derived_from.** The required field is empty or absent. Add it and retry.
-- **Duplicate detected.** A near-identical entity exists in the target namespace. RESOLVE it, decide whether to supersede or skip, retry accordingly.
-- **Scope access denied.** The target scope is outside what your agent identity can write to. Check `entity:agent:default:coordination` for the agent roster and your namespace; if the rejection is unexpected, escalate to the user.
-- **Invalid relationship target.** A relationship in your list points to an entity that does not exist or that you cannot see. RESOLVE the target first; if it does not exist, drop or rewrite that relationship.
+- **Duplicate detected.** A near-identical entity exists in the target namespace. RESOLVE it, decide whether to supersede or skip, retry accordingly. If superseding, switch to `cqr_update` rather than retrying the assert.
+- **Already exists.** A non-similar entity at the exact target address exists. Use `cqr_update` to evolve its content, or pick a different address.
+- **Scope access denied.** The target scope is outside what your agent identity can write to. Check `entity:coordination:roster` for the agent roster and your namespace; if the rejection is unexpected, escalate to the user.
+- **Invalid relationship target.** A relationship in your list points to an entity that does not exist or that you cannot see. RESOLVE the target first; if it does not exist, drop or rewrite that relationship. Within a batch, ensure the target is asserted earlier in the array than the entity that references it.
 
 Rejections are recoverable. The graph is not corrupted by failed writes — only successful writes change state. Treat rejections as feedback from a strict reviewer, not as failure conditions.
 
