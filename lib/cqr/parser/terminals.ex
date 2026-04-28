@@ -67,11 +67,10 @@ defmodule Cqr.Parser.Terminals do
   def entity_prefix do
     string("entity:")
     |> ignore()
-    |> concat(identifier())
-    |> times(ignore(string(":")) |> concat(identifier()), min: 1)
-    |> ignore(string(":*"))
+    |> repeat(identifier() |> ignore(string(":")))
+    |> ignore(string("*"))
     |> reduce({__MODULE__, :to_prefix_segments, []})
-    |> label("entity prefix reference (entity:ns:name:*)")
+    |> label("entity prefix reference (entity:*, entity:ns:*, entity:ns:name:*, ...)")
   end
 
   def to_prefix_segments(segments) when is_list(segments), do: segments

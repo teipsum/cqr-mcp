@@ -135,6 +135,8 @@ defmodule Cqr.Engine.Planner do
   defp extract_top_namespace(%Cqr.Discover{related_to: {:entity, entity}}),
     do: top_namespace(entity)
 
+  defp extract_top_namespace(%Cqr.Discover{related_to: {:prefix, []}}), do: nil
+
   defp extract_top_namespace(%Cqr.Discover{related_to: {:prefix, [seg | _]}})
        when is_binary(seg),
        do: seg

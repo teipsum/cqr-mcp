@@ -99,8 +99,15 @@ defmodule Cqr.Adapter.Grafeo do
   # from a nonexistent anchor.
   defp prefix_discover(segments, visible, expression) do
     case segments_to_entity(segments) do
-      nil ->
-        {:ok, empty_prefix_result(segments)}
+      :global ->
+        rows = collect_global_prefix_rows(visible)
+        limited = maybe_limit(rows, expression.limit || 50)
+        {:ok, build_prefix_result(limited, segments)}
+
+      {:namespace, ns} ->
+        rows = collect_namespace_prefix_rows(ns, visible)
+        limited = maybe_limit(rows, expression.limit)
+        {:ok, build_prefix_result(limited, segments)}
 
       anchor ->
         rows = collect_prefix_rows(anchor, visible)
@@ -122,11 +129,75 @@ defmodule Cqr.Adapter.Grafeo do
     end
   end
 
+  # Map prefix segments to a discovery target. Three shapes:
+  #
+  #   * `[]` (`entity:*`) → `:global`. Enumerate every visible entity.
+  #   * `[ns]` (`entity:NS:*`) → `{:namespace, ns}`. Enumerate by namespace
+  #     pattern (namespace == ns OR namespace starts with "ns:"). Top-level
+  #     containers are never auto-created with empty namespace, so we cannot
+  #     anchor on `{"", ns}` and traverse CONTAINS — see `cascade_containers`.
+  #   * deeper (`entity:A:B:*`, `entity:A:B:C:*`, ...) → `{ns, name}` anchor
+  #     entity. Existing CONTAINS-traversal path applies.
+  defp segments_to_entity([]), do: :global
+  defp segments_to_entity([ns]) when is_binary(ns), do: {:namespace, ns}
+
   defp segments_to_entity(segments) when is_list(segments) do
-    case Enum.split(segments, -1) do
-      {[], _} -> nil
-      {ns_segments, [name]} -> {Enum.join(ns_segments, ":"), name}
+    {ns_segments, [name]} = Enum.split(segments, -1)
+    {Enum.join(ns_segments, ":"), name}
+  end
+
+  # `entity:*` — enumerate every entity visible to the agent. Reuses the
+  # search-path candidate fetcher, which already enforces scope visibility
+  # inside the MATCH (no entity outside the visible scope set is ever
+  # materialized). LIMIT defaults to 50 in `prefix_discover` to keep the
+  # naked-wildcard response from running away on a large graph.
+  defp collect_global_prefix_rows(visible) do
+    case fetch_candidates(visible) do
+      {:ok, candidates} ->
+        Enum.map(candidates, fn {row, paths} ->
+          build_prefix_row_from_search(row, paths)
+        end)
+
+      {:error, _} ->
+        []
     end
+  end
+
+  # `entity:NS:*` — enumerate visible entities whose top-level namespace
+  # segment is `ns`. Matches both the top-level entities at depth 2 (where
+  # `namespace == ns`) and every deeper descendant whose namespace begins
+  # with `"ns:"`. Filtered in Elixir against the candidate set already
+  # narrowed by visible scopes.
+  defp collect_namespace_prefix_rows(ns, visible) do
+    prefix = ns <> ":"
+
+    case fetch_candidates(visible) do
+      {:ok, candidates} ->
+        candidates
+        |> Enum.filter(fn {row, _paths} ->
+          row_ns = row["e.namespace"] || ""
+          row_ns == ns or String.starts_with?(row_ns, prefix)
+        end)
+        |> Enum.map(fn {row, paths} -> build_prefix_row_from_search(row, paths) end)
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  defp build_prefix_row_from_search(row, scope_paths) do
+    %{
+      entity: {row["e.namespace"], row["e.name"]},
+      namespace: row["e.namespace"],
+      name: row["e.name"],
+      type: row["e.type"],
+      description: Codec.decode(row["e.description"]),
+      owner: row["e.owner"],
+      reputation: row["e.reputation"],
+      certified: row["e.certified"],
+      scopes: Enum.map(scope_paths, fn path -> String.split(path, ":") end),
+      source: "prefix"
+    }
   end
 
   defp enumerate_prefix_descendants([], _visible_keys, acc), do: Enum.reverse(acc)
@@ -233,10 +304,6 @@ defmodule Cqr.Adapter.Grafeo do
             "(#{length(rows)} visible)"
       }
     }
-  end
-
-  defp empty_prefix_result(segments) do
-    build_prefix_result([], segments)
   end
 
   # Dispatch to the right semantic query (or both) based on the requested

@@ -39,6 +39,37 @@ defmodule Cqr.Parser.DiscoverTest do
       assert result.related_to == {:prefix, ["agent", "patent_agent", "group", "sub"]}
     end
 
+    test "global entity prefix (entity:*)" do
+      {:ok, result} = Parser.parse("DISCOVER concepts RELATED TO entity:*")
+      assert result.related_to == {:prefix, []}
+    end
+
+    test "global entity prefix with LIMIT" do
+      {:ok, result} = Parser.parse("DISCOVER concepts RELATED TO entity:* LIMIT 10")
+      assert result.related_to == {:prefix, []}
+      assert result.limit == 10
+    end
+
+    test "single-segment entity prefix (entity:NS:*)" do
+      {:ok, result} = Parser.parse("DISCOVER concepts RELATED TO entity:engineering:*")
+      assert result.related_to == {:prefix, ["engineering"]}
+    end
+
+    test "two-segment entity prefix (regression)" do
+      {:ok, result} = Parser.parse("DISCOVER concepts RELATED TO entity:engineering:state:*")
+      assert result.related_to == {:prefix, ["engineering", "state"]}
+    end
+
+    test "four-segment entity prefix (regression)" do
+      {:ok, result} =
+        Parser.parse(
+          "DISCOVER concepts RELATED TO entity:engineering:proposals:grafeo_capability_extensions:*"
+        )
+
+      assert result.related_to ==
+               {:prefix, ["engineering", "proposals", "grafeo_capability_extensions"]}
+    end
+
     test "entity reference without trailing :* is NOT treated as a prefix" do
       {:ok, result} =
         Parser.parse("DISCOVER concepts RELATED TO entity:agent:patent_agent")

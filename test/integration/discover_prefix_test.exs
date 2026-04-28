@@ -123,6 +123,105 @@ defmodule Cqr.Integration.DiscoverPrefixTest do
     end
   end
 
+  describe "DISCOVER prefix mode — shallow prefixes" do
+    test "single-segment prefix enumerates entities under the namespace" do
+      assert {:ok, _} =
+               Engine.execute(
+                 hierarchical_assert("dpfx_ns_a:branch", "leaf1"),
+                 @product_context
+               )
+
+      assert {:ok, _} =
+               Engine.execute(
+                 hierarchical_assert("dpfx_ns_a:branch", "leaf2"),
+                 @product_context
+               )
+
+      assert {:ok, _} =
+               Engine.execute(
+                 hierarchical_assert("dpfx_ns_b:other", "x"),
+                 @product_context
+               )
+
+      assert {:ok, %Cqr.Result{data: rows}} =
+               Engine.execute(
+                 "DISCOVER concepts RELATED TO entity:dpfx_ns_a:* LIMIT 100",
+                 @product_context
+               )
+
+      names = rows |> Enum.map(& &1.name) |> Enum.sort()
+      assert "leaf1" in names
+      assert "leaf2" in names
+      assert "branch" in names
+      refute "x" in names
+
+      assert Enum.all?(rows, fn r ->
+               r.namespace == "dpfx_ns_a" or String.starts_with?(r.namespace, "dpfx_ns_a:")
+             end)
+    end
+
+    test "single-segment prefix prunes entities outside the agent's visible scopes" do
+      assert {:ok, _} =
+               Engine.execute(
+                 hierarchical_assert("dpfx_ns_scoped:branch", "leaf"),
+                 @product_context
+               )
+
+      assert {:ok, %Cqr.Result{data: rows}} =
+               Engine.execute(
+                 "DISCOVER concepts RELATED TO entity:dpfx_ns_scoped:* LIMIT 100",
+                 @finance_context
+               )
+
+      assert rows == []
+    end
+
+    test "single-segment prefix with deeper nested entity returns the descendant" do
+      assert {:ok, _} =
+               Engine.execute(
+                 hierarchical_assert("dpfx_ns_deep:branch:nested", "deep_leaf"),
+                 @product_context
+               )
+
+      assert {:ok, %Cqr.Result{data: rows}} =
+               Engine.execute(
+                 "DISCOVER concepts RELATED TO entity:dpfx_ns_deep:* LIMIT 100",
+                 @product_context
+               )
+
+      names = rows |> Enum.map(& &1.name) |> Enum.sort()
+      assert "deep_leaf" in names
+    end
+
+    test "global prefix entity:* returns visible entities and respects LIMIT" do
+      assert {:ok, _} =
+               Engine.execute(
+                 hierarchical_assert("dpfx_global:branch", "marker"),
+                 @product_context
+               )
+
+      assert {:ok, %Cqr.Result{data: rows}} =
+               Engine.execute(
+                 "DISCOVER concepts RELATED TO entity:* LIMIT 200",
+                 @product_context
+               )
+
+      assert Enum.any?(rows, fn r ->
+               r.namespace == "dpfx_global:branch" and r.name == "marker"
+             end)
+    end
+
+    test "global prefix entity:* defaults LIMIT to 50 when unspecified" do
+      assert {:ok, %Cqr.Result{data: rows}} =
+               Engine.execute(
+                 "DISCOVER concepts RELATED TO entity:*",
+                 @product_context
+               )
+
+      assert length(rows) <= 50
+    end
+  end
+
   describe "DISCOVER prefix mode — does not affect other DISCOVER paths" do
     test "regular entity DISCOVER continues to work" do
       assert {:ok, %Cqr.Result{data: rows}} =
