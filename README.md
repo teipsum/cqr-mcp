@@ -256,7 +256,7 @@ The twelve-primitive protocol is shipped. What is next:
 - **Phoenix LiveView interface** — A first-party operator UI for browsing scopes, inspecting provenance chains, reviewing certification queues, and watching live signal traffic. Consumes the same `Cqr.Engine.execute/2` boundary as MCP clients, so governance behaviour is identical.
 - **Cognitive evidence experiments** — Structured benchmarks measuring how scope-bounded retrieval, mandatory quality metadata, and provenance-aware error envelopes change LLM agent behaviour against ungoverned RAG baselines.
 - **Enterprise adapters** — Reference adapters for PostgreSQL/pgvector, Neo4j, Elasticsearch, and warehouse backends (Snowflake, BigQuery). The behaviour contract already supports them; these are configuration-driven implementations.
-- **Multi-agent runtime** — Agent taxonomy with permission intersection, human-agent coupling management, lease-based resource governance, and context contamination prevention. UNICA commercial platform features that consume this server as a building block.
+- **Multi-agent runtime** — Agent taxonomy with permission intersection, human-agent coupling management, lease-based resource governance, and context contamination prevention.
 
 ## Testing
 

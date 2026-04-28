@@ -14,7 +14,7 @@ defmodule CqrMcp do
 
   ## Embedded Mode
 
-  When a host application (e.g. UNICA) depends on `cqr_mcp` as a library,
+  When a host application depends on `cqr_mcp` as a library,
   it can enable embedded mode so CQR does not start its own Grafeo server
   (avoiding database-lock conflicts):
 

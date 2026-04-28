@@ -13,7 +13,7 @@ defmodule CqrMcp.Application do
       as a standalone OS process.
 
     * **Embedded** (`config :cqr_mcp, :embedded, true`) -- the host
-      application (e.g. UNICA) owns the Grafeo database and MCP transport.
+      host application owns the Grafeo database and MCP transport.
       CQR starts only library infrastructure (scope-tree cache, MCP tool
       server, SSE registry) and exposes `Cqr.Engine.execute/2` as a pure
       library call.

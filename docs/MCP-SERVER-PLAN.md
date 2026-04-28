@@ -498,7 +498,6 @@ Do NOT spend more than 1.5 days on NIF issues before switching to a fallback. Th
      # CQR MCP server running on stdio — connect Claude Desktop
      ```
    - Architecture diagram (Mermaid or SVG): Agent → MCP Client → CQR MCP Server → Engine → Embedded Grafeo
-   - What's included vs. what's in UNICA (the commercial line, clearly stated)
    - License (BSL 1.1, converts to MIT)
 
 2. **ARCHITECTURE.md:**
@@ -634,7 +633,6 @@ These are explicitly out of scope but documented here so the architecture accomm
 - **Distributed reputation network** (CRDT-based quality scoring)
 - **LiveView dashboard** (monitoring, query history, governance audit trail)
 - **Validation suite integration** (run the 100-intent corpus against the MCP server)
-- **UNICA commercial features** (everything in the "what we're NOT building" list above)
 
 The architecture should make adding these feel like extending, not rewriting. If Phase 1-3 are done right, adding TRACE is "write the parser combinator + the adapter query + the tests." If they're done wrong, adding TRACE means touching 15 files.
 

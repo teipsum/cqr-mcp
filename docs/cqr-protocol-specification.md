@@ -4,7 +4,7 @@
 
 **April 2026 · TEIPSUM**
 
-The native context interaction language of the UNICA platform.
+A native context interaction language for governed organizational context.
 
 ---
 
@@ -37,7 +37,7 @@ CQR was previously named SEQUR (Semantic Query Resolution). The USPTO provisiona
 
 ## 1. Overview
 
-CQR (Cognitive Query Resolution) is designed for machine cognition as the primary consumer. AI agents generate CQR expressions to interact with organizational context, and the UNICA platform translates those expressions into operations across heterogeneous storage backends.
+CQR (Cognitive Query Resolution) is designed for machine cognition as the primary consumer. AI agents generate CQR expressions to interact with organizational context, and the host platform translates those expressions into operations across heterogeneous storage backends.
 
 This document defines the formal specification: the grammar, type system, primitive semantics, return envelope, error model, and agent generation contract.
 

@@ -49,7 +49,7 @@ The canonical specification with full grammar, semantics, and examples for all t
 
 **Patent filing:** Non-provisional patent filed April 9, 2026 (Application 64/034,544), covering the CQR query language, agent generation contract, adapter architecture, and governance invariance boundary.
 
-**What is NOT in this repo:** Multi-agent runtime (agent taxonomy, co-sponsorship, permission intersection), human-agent coupling management, lease-based resource governance, context contamination prevention. These are UNICA commercial platform features (separate repo, proprietary). All twelve CQR primitives (including COMPARE, HYPOTHESIZE, ANCHOR, AWARENESS, and UPDATE) ship in this repository.
+**What is NOT in this repo:** Multi-agent runtime (agent taxonomy, co-sponsorship, permission intersection), human-agent coupling management, lease-based resource governance, context contamination prevention. All twelve CQR primitives (including COMPARE, HYPOTHESIZE, ANCHOR, AWARENESS, and UPDATE) ship in this repository.
 
 ---
 
@@ -477,9 +477,7 @@ These are non-negotiable for every Claude Code session:
 | Document | Contains |
 |---|---|
 | `README.md` (root) | **Canonical CQR Protocol Specification v1.0.** All twelve primitives in six categories, full grammar, return envelope, error semantics, MCP delivery. The user-facing spec. |
-| `specs/Assert primitive specification.md` | Detailed ASSERT primitive spec with two-tier trust model and certification lifecycle. GPG-signed for patent evidence. |
 | `docs/MCP-SERVER-PLAN.md` | Full phased build plan (Phases 0-6), risk register, timeline |
-| `docs/UNICA-MVP2-Developer-Tools-Spec.md` | Developer tooling spec (Playground, Schema Builder, Governance Explorer, Generation Lab, Integration Console) |
 | `docs/CQR-TECHNICAL-SPEC.md` | **Historical** — V0.1 March 2026 draft, written before the SEQUR→CQR rename and the ASSERT/HYPOTHESIZE/COMPARE/ANCHOR additions. Superseded by `README.md`. Kept for patent-evidence continuity. |
 | `docs/VALIDATION-SUITE.md` | MVP1 validation suite spec, 100-intent corpus design, scoring engine |
 

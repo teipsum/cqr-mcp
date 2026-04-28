@@ -4,7 +4,7 @@ MVP1 Feature Definition
 
 Current State Assessment, Feature Specifications, and Patent Evidence Requirements
 
-TEIPSUM / UNICA Platform
+TEIPSUM
 
 March 2026 (originally drafted under the SEQUR name, renamed April 2026)
 
@@ -25,7 +25,7 @@ The current test harness consists of 55 ExUnit tests across unit and integration
 | Cqr.ParserTest | ~20 | Parser correctness for RESOLVE and DISCOVER primitives. Syntax variants, optional clause ordering, arrow formats, uppercase identifiers. |
 | Cqr.IntegrationTest | ~10 | End-to-end: parse CQR string, execute against real Postgres/Neo4j, verify return envelopes. Scope fallback, reputation filtering, DISCOVER graph traversal. |
 | Cqr.EngineTest | ~10 | Context Assembly Engine fan-out via Task.async_stream across adapters. Multi-adapter result merging, sources field attribution. |
-| Unica.AgentTwinTest | ~10 | GenServer lifecycle, multi-step reasoning loop (DISCOVER → rank → RESOLVE → synthesize), LLM integration. |
+| CqrMcp.AgentTwinTest | ~10 | GenServer lifecycle, multi-step reasoning loop (DISCOVER → rank → RESOLVE → synthesize), LLM integration. |
 | Adapter health checks | ~5 | Postgres and Neo4j connectivity and health_check/0 callback. |
 
 ### What These Tests Do Not Cover
@@ -371,7 +371,7 @@ The runner must handle: LLM timeouts (configurable, default 60s per intent), LLM
 
 The runner is a GenServer under the application supervision tree. It processes intents sequentially (not concurrently) to avoid LLM rate limiting and to ensure deterministic ordering. Progress is broadcast via Phoenix PubSub so the LiveView dashboard can show real-time progress.
 
-defmodule Unica.Validation.Runner do
+defmodule CqrMcp.Validation.Runner do
 
   use GenServer
 

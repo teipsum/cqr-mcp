@@ -168,10 +168,10 @@ defmodule Cqr.ParserTest do
     test "hierarchical entity works in ASSERT" do
       {:ok, %Cqr.Assert{} = result} =
         Parser.parse(
-          ~s(ASSERT entity:product:uqr:cognitive:preamble TYPE definition DESCRIPTION "test")
+          ~s(ASSERT entity:product:domain:cognitive:preamble TYPE definition DESCRIPTION "test")
         )
 
-      assert result.entity == {"product:uqr:cognitive", "preamble"}
+      assert result.entity == {"product:domain:cognitive", "preamble"}
     end
 
     test "trailing colon is malformed" do

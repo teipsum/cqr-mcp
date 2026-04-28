@@ -12,7 +12,7 @@
 
 Semantic Query Resolution
 
-The Native Language of the UNICA Platform
+Native Language for Governed Context
 
 Technical Specification v0.1
 
@@ -24,7 +24,7 @@ DRAFT — March 2026
 
 # Overview
 
-CQR (Semantic Query Resolution) is the native context interaction language of the UNICA platform. It is designed for machine cognition as the primary consumer—agents generate CQR expressions to interact with organizational context, and the UNICA platform translates those expressions into operations across heterogeneous storage backends.
+CQR (Semantic Query Resolution) is the native context interaction language of the host platform. It is designed for machine cognition as the primary consumer—agents generate CQR expressions to interact with organizational context, and the host platform translates those expressions into operations across heterogeneous storage backends.
 
 This document defines the formal specification for CQR: the grammar, type system, primitive semantics, return envelope, error model, and agent generation contract. It serves as both the implementation reference for the NimbleParsec parser and the validation reference for testing LLM generation accuracy.
 
@@ -60,7 +60,7 @@ CQR operates over a small, well-defined set of types. Constraining the type syst
 
 ## Scope Hierarchy
 
-Scopes are hierarchical, using colon-delimited nesting. A query against a parent scope includes all child scopes unless explicitly restricted. The hierarchy supports the six context scoping levels defined in the UNICA platform architecture:
+Scopes are hierarchical, using colon-delimited nesting. A query against a parent scope includes all child scopes unless explicitly restricted. The hierarchy supports the six context scoping levels defined in the host platform architecture:
 
 scope:global                    → organizational root
 
@@ -512,7 +512,7 @@ Every CQR operation returns a response within a standard envelope structure. Thi
 
 ## Cost Accounting
 
-Every response includes a cost field that tracks resource consumption. This feeds directly into the UNICA platform’s agentic budget model:
+Every response includes a cost field that tracks resource consumption. This feeds directly into the host platform’s agentic budget model:
 
 - **context_ops: **The number of context operations consumed. RESOLVE and SIGNAL each cost 1. DISCOVER costs 1. TRACE costs 1 + N where N is the number of causal depth expansions. REFRESH EXPAND costs 1 + the number of entities refreshed.
 
