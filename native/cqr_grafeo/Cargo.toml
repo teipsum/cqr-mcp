@@ -9,9 +9,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rustler = "0.37"
-grafeo = { version = "0.5.40", default-features = true }
-grafeo-common = "0.5.40"
-grafeo-engine = "0.5.40"
+grafeo = { version = "=0.5.40", default-features = true }
+grafeo-common = "=0.5.40"
+grafeo-engine = "=0.5.40"
 
 [features]
 default = ["nif_version_2_16"]
