@@ -51,7 +51,7 @@ defmodule Cqr.Integration.AdapterTest do
       }
 
       scope = %{visible_scopes: [["company", "finance"], ["company", "product"], ["company"]]}
-      {:ok, results} = GrafeoAdapter.resolve_batch(expression, scope, [])
+      {:ok, %Cqr.Result{data: results}} = GrafeoAdapter.resolve_batch(expression, scope, [])
 
       assert length(results) == 2
       assert Enum.all?(results, &(&1.status == :ok))
@@ -67,7 +67,7 @@ defmodule Cqr.Integration.AdapterTest do
     test "empty entity list returns empty result list" do
       expression = %Cqr.ResolveBatch{entities: []}
       scope = %{visible_scopes: [["company"]]}
-      {:ok, results} = GrafeoAdapter.resolve_batch(expression, scope, [])
+      {:ok, %Cqr.Result{data: results}} = GrafeoAdapter.resolve_batch(expression, scope, [])
       assert results == []
     end
 
@@ -79,7 +79,8 @@ defmodule Cqr.Integration.AdapterTest do
         ]
       }
 
-      {:ok, results} = GrafeoAdapter.resolve_batch(expression, @finance_scope, [])
+      {:ok, %Cqr.Result{data: results}} =
+        GrafeoAdapter.resolve_batch(expression, @finance_scope, [])
 
       assert length(results) == 2
       [first, second] = results
@@ -101,7 +102,8 @@ defmodule Cqr.Integration.AdapterTest do
         ]
       }
 
-      {:ok, results} = GrafeoAdapter.resolve_batch(expression, @engineering_scope, [])
+      {:ok, %Cqr.Result{data: results}} =
+        GrafeoAdapter.resolve_batch(expression, @engineering_scope, [])
 
       assert length(results) == 2
       assert Enum.all?(results, &(&1.status == :not_found))
@@ -122,7 +124,9 @@ defmodule Cqr.Integration.AdapterTest do
         end
 
       expression = %Cqr.ResolveBatch{entities: entities}
-      {:ok, results} = GrafeoAdapter.resolve_batch(expression, @finance_scope, [])
+
+      {:ok, %Cqr.Result{data: results}} =
+        GrafeoAdapter.resolve_batch(expression, @finance_scope, [])
 
       assert length(results) == 10
       okays = Enum.count(results, &(&1.status == :ok))
@@ -136,7 +140,9 @@ defmodule Cqr.Integration.AdapterTest do
       {:ok, single_result} = GrafeoAdapter.resolve(single_expr, @finance_scope, [])
 
       batch_expr = %Cqr.ResolveBatch{entities: [{"finance", "arr"}]}
-      {:ok, [batch_row]} = GrafeoAdapter.resolve_batch(batch_expr, @finance_scope, [])
+
+      {:ok, %Cqr.Result{data: [batch_row]}} =
+        GrafeoAdapter.resolve_batch(batch_expr, @finance_scope, [])
 
       # The payload from a 1-element batch should be equivalent to a single resolve.
       assert batch_row.payload.data == single_result.data

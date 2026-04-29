@@ -20,6 +20,7 @@ defmodule Cqr.Adapter.Grafeo do
   def capabilities,
     do: [
       :resolve,
+      :resolve_batch,
       :discover,
       :assert,
       :trace,
@@ -94,7 +95,10 @@ defmodule Cqr.Adapter.Grafeo do
         end
       end)
 
-    {:ok, results}
+    # Per-row results live in `data`. Quality envelope is empty at the batch level
+    # because each row carries its own per-entity payload (which itself contains
+    # per-entity quality metadata via normalize_entity).
+    {:ok, %Cqr.Result{data: results, sources: ["grafeo"]}}
   end
 
   @impl true

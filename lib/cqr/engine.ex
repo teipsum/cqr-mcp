@@ -213,6 +213,7 @@ defmodule Cqr.Engine do
       fn {adapter, primitive} ->
         case primitive do
           :resolve -> adapter.resolve(ast, scope_context, [])
+          :resolve_batch -> adapter.resolve_batch(ast, scope_context, [])
           :discover -> adapter.discover(ast, scope_context, [])
         end
       end,

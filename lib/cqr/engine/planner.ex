@@ -125,6 +125,7 @@ defmodule Cqr.Engine.Planner do
   end
 
   defp primitive_type(%Cqr.Resolve{}), do: :resolve
+  defp primitive_type(%Cqr.ResolveBatch{}), do: :resolve_batch
   defp primitive_type(%Cqr.Discover{}), do: :discover
   defp primitive_type(%Cqr.Certify{}), do: :certify
 
