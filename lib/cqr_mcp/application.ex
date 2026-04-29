@@ -43,7 +43,11 @@ defmodule CqrMcp.Application do
   defp standalone_children do
     {storage, seed, reset} = parse_storage_args(System.argv())
 
+    # Cqr.Embedding boots before Cqr.Grafeo.Server so the bge-small model is
+    # loaded and JIT-compiled before the first agent request lands. First-call
+    # latency would otherwise spike to 10-30s on cold cache.
     [
+      Cqr.Embedding,
       {Cqr.Grafeo.Server, storage: storage, seed: seed, reset: reset}
       | library_children()
     ]

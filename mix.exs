@@ -42,6 +42,22 @@ defmodule CqrMcp.MixProject do
       # HTTP server for MCP SSE transport
       {:plug, "~> 1.16"},
       {:bandit, "~> 1.6"},
+      # Semantic embeddings: Bumblebee runs the model in-BEAM, EXLA JIT-compiles
+      # the graph to the local accelerator (Metal on Apple Silicon, CPU
+      # otherwise). Nx is the underlying tensor library. Pinned to current
+      # 0.6 / 0.10 / 0.10 line per the Bumblebee README; bumping these
+      # together is the safe path because the three move in lockstep.
+      #
+      # Apple Silicon + Xcode CLT 26+ build note: XLA 0.9.1's bundled headers
+      # specialize std::is_signed, which Apple clang 21 makes a hard error
+      # via the new no_specializations attribute. On a fresh install run
+      #   CFLAGS="-Wno-error=invalid-specialization" mix deps.compile exla
+      # once. The compiled libexla.so is then cached at
+      # ~/Library/Caches/xla/exla/... so subsequent rebuilds skip the C++
+      # compile entirely.
+      {:bumblebee, "~> 0.6.0"},
+      {:nx, "~> 0.10"},
+      {:exla, "~> 0.10"},
       # Documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       # Static analysis
