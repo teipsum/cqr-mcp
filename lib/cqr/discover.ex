@@ -16,6 +16,14 @@ defmodule Cqr.Discover do
         direction: :both
       }
 
+  ## Example with `near` (search mode)
+
+      %Cqr.Discover{
+        related_to: {:search, "patent strategy"},
+        near: {"patent:filings", "provisional"},
+        limit: 10
+      }
+
   ## Direction
 
   Edges are stored once, directionally. The `direction` field controls
@@ -24,6 +32,13 @@ defmodule Cqr.Discover do
     * `:outbound` — the anchor entity is the edge source
     * `:inbound`  — the anchor entity is the edge target
     * `:both`     — union of both queries (default when nil)
+
+  ## Near
+
+  Optional. When set on a `{:search, term}` discovery, ranking is biased
+  toward entities that are both semantically related to the term AND
+  structurally adjacent to the `near` anchor in the relationship graph.
+  Ignored by anchor-mode and prefix-mode discovery.
   """
 
   @type direction :: :outbound | :inbound | :both
@@ -37,8 +52,9 @@ defmodule Cqr.Discover do
           depth: pos_integer() | nil,
           annotate: [atom()] | nil,
           limit: pos_integer() | nil,
-          direction: direction() | nil
+          direction: direction() | nil,
+          near: {String.t(), String.t()} | nil
         }
 
-  defstruct [:related_to, :within, :depth, :annotate, :limit, :direction]
+  defstruct [:related_to, :within, :depth, :annotate, :limit, :direction, :near]
 end

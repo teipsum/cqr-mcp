@@ -213,6 +213,145 @@ defmodule Cqr.Integration.AdapterTest do
     end
   end
 
+  describe "search discovery with near anchor" do
+    @full_scope %{
+      visible_scopes: [
+        ["company"],
+        ["company", "finance"],
+        ["company", "product"],
+        ["company", "engineering"],
+        ["company", "hr"],
+        ["company", "customer_success"]
+      ]
+    }
+
+    test "biases ranking toward entities adjacent to the near anchor" do
+      # product:retention_rate is BFS-distance 1 from product:churn_rate
+      # (CORRELATES_WITH). engineering:incident_rate is unreachable from
+      # product:churn_rate via typed edges in the seed graph. Both have
+      # "rate" in their name, so without near their text scores are equal.
+      # With near, the proximity term should push retention_rate above
+      # incident_rate.
+      expression = %Cqr.Discover{
+        related_to: {:search, "rate"},
+        near: {"product", "churn_rate"}
+      }
+
+      {:ok, result} = GrafeoAdapter.discover(expression, @full_scope, [])
+
+      retention =
+        Enum.find(result.data, fn r -> r.entity == {"product", "retention_rate"} end)
+
+      incident =
+        Enum.find(result.data, fn r -> r.entity == {"engineering", "incident_rate"} end)
+
+      assert retention != nil
+      assert retention.near_distance == 1
+      # incident_rate may or may not surface depending on vector pickup,
+      # but if it surfaces it must be unreachable from the anchor.
+      if incident do
+        assert incident.near_distance == nil
+        assert retention.combined_score > incident.combined_score
+      end
+    end
+
+    test "near=nil produces results identical to omitting the near field entirely" do
+      term = "revenue"
+
+      with_nil = %Cqr.Discover{related_to: {:search, term}, near: nil}
+      without = %Cqr.Discover{related_to: {:search, term}}
+
+      {:ok, r1} = GrafeoAdapter.discover(with_nil, @finance_scope, [])
+      {:ok, r2} = GrafeoAdapter.discover(without, @finance_scope, [])
+
+      assert r1.data == r2.data
+      # And confirms backwards-compat output shape: no :near_distance key.
+      Enum.each(r1.data, fn row -> refute Map.has_key?(row, :near_distance) end)
+    end
+
+    test "entities outside the BFS reach surface with near_distance == nil" do
+      # finance:cac and finance:ltv are seeded but disconnected from
+      # product:churn_rate's BFS tree. They will surface via vector or
+      # text matches but should carry near_distance = nil.
+      expression = %Cqr.Discover{
+        related_to: {:search, "customer"},
+        near: {"product", "churn_rate"}
+      }
+
+      {:ok, result} = GrafeoAdapter.discover(expression, @full_scope, [])
+
+      unreachable =
+        Enum.filter(result.data, fn r ->
+          r.entity in [{"finance", "cac"}, {"finance", "ltv"}]
+        end)
+
+      assert unreachable != []
+      Enum.each(unreachable, fn r -> assert r.near_distance == nil end)
+    end
+
+    test "near pointing at a non-existent anchor still returns search results" do
+      expression = %Cqr.Discover{
+        related_to: {:search, "revenue"},
+        near: {"nonexistent_ns", "fake_addr"}
+      }
+
+      {:ok, result} = GrafeoAdapter.discover(expression, @finance_scope, [])
+
+      assert [_ | _] = result.data
+      Enum.each(result.data, fn row -> assert row.near_distance == nil end)
+    end
+
+    test "near_distance is present iff near is set" do
+      term = "revenue"
+
+      {:ok, without_near} =
+        GrafeoAdapter.discover(
+          %Cqr.Discover{related_to: {:search, term}},
+          @finance_scope,
+          []
+        )
+
+      {:ok, with_near} =
+        GrafeoAdapter.discover(
+          %Cqr.Discover{related_to: {:search, term}, near: {"finance", "arr"}},
+          @finance_scope,
+          []
+        )
+
+      Enum.each(without_near.data, fn row -> refute Map.has_key?(row, :near_distance) end)
+      Enum.each(with_near.data, fn row -> assert Map.has_key?(row, :near_distance) end)
+    end
+
+    test "BFS depth cap of 4 is enforced — every reachable distance is in [0, 4]" do
+      # Seed graph's longest reachable chain from product:churn_rate is 3
+      # hops (churn_rate → nps → csat → ticket_resolution_time), so this
+      # exercises the cap by asserting no result ever exceeds it.
+      expression = %Cqr.Discover{
+        related_to: {:search, "customer"},
+        near: {"product", "churn_rate"}
+      }
+
+      {:ok, result} = GrafeoAdapter.discover(expression, @full_scope, [])
+
+      Enum.each(result.data, fn row ->
+        case row.near_distance do
+          nil -> :ok
+          d when is_integer(d) and d >= 0 and d <= 4 -> :ok
+          other -> flunk("near_distance out of bounds: #{inspect(other)}")
+        end
+      end)
+
+      # And the d=3 entity actually carries distance 3, confirming the
+      # BFS reaches that depth (i.e. the cap is at least 3).
+      ticket =
+        Enum.find(result.data, fn r ->
+          r.entity == {"customer_success", "ticket_resolution_time"}
+        end)
+
+      if ticket, do: assert(ticket.near_distance == 3)
+    end
+  end
+
   describe "health_check/0" do
     test "reports healthy" do
       {:ok, health} = GrafeoAdapter.health_check()

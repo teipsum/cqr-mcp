@@ -393,7 +393,7 @@ defmodule Cqr.Adapter.Grafeo do
 
       {:ok, candidates} ->
         query_embedding = Cqr.Embedding.embed(term)
-        ranked = rank_candidates(candidates, term, query_embedding)
+        ranked = rank_candidates(candidates, term, query_embedding, expression.near)
         limited = maybe_limit(ranked, expression.limit)
         {:ok, build_search_result(limited)}
 
@@ -439,19 +439,27 @@ defmodule Cqr.Adapter.Grafeo do
 
   # Rank the candidate set by text relevance + vector similarity, merging
   # by entity identity. Every returned map has a `source` tag.
-  defp rank_candidates(candidates, term, query_embedding) do
+  #
+  # When `near` is a `{ns, name}` tuple, BFS distance from that anchor through
+  # typed relationship edges is computed and folded into the combined score.
+  # When `near` is nil, scoring is unchanged from the pre-near formula.
+  defp rank_candidates(candidates, term, query_embedding, near) do
     normalized_term = String.downcase(term)
+    distance_map = compute_distance_map(near)
 
     scored =
       Enum.map(candidates, fn {row, paths} ->
         text_score = text_relevance(row, normalized_term)
         similarity = vector_similarity(row["e.embedding"], query_embedding)
+        key = {row["e.namespace"], row["e.name"]}
+        bfs_distance = Map.get(distance_map, key)
 
         %{
           row: row,
           scope_paths: paths,
           text_score: text_score,
-          similarity: similarity
+          similarity: similarity,
+          bfs_distance: bfs_distance
         }
       end)
 
@@ -463,7 +471,7 @@ defmodule Cqr.Adapter.Grafeo do
       |> Enum.sort_by(fn s -> -s.similarity end)
       |> Enum.take(@vector_top_k)
 
-    merge_modalities(text_hits, vector_hits)
+    merge_modalities(text_hits, vector_hits, near)
   end
 
   # Simple case-insensitive substring count across name + description.
@@ -523,9 +531,13 @@ defmodule Cqr.Adapter.Grafeo do
   # Merge text_hits and vector_hits by entity identity, tagging each
   # result with the retrieval modality that surfaced it. Results that
   # appear in both modalities carry source: "both" and keep both scores.
-  # Ranking: results from either modality are ordered by combined score
-  # (text normalized to [0, 1] + similarity).
-  defp merge_modalities(text_hits, vector_hits) do
+  # Ranking: results from either modality are ordered by combined score.
+  #
+  # Without `near`: combined = text_normalized + similarity (existing formula).
+  # With `near`:    combined = 0.4*text_normalized + 0.4*similarity + 0.2*proximity,
+  # where proximity = 1 / (1 + bfs_distance) and entities beyond the BFS depth
+  # cap contribute proximity = 0.
+  defp merge_modalities(text_hits, vector_hits, near) do
     max_text =
       text_hits
       |> Enum.map(& &1.text_score)
@@ -561,16 +573,28 @@ defmodule Cqr.Adapter.Grafeo do
           m -> hit.text_score / m
         end
 
-      combined = text_normalized + (hit.similarity || 0.0)
-      build_search_row(hit, source, combined)
+      similarity = hit.similarity || 0.0
+
+      combined =
+        if near do
+          proximity = proximity_score(hit.bfs_distance)
+          0.4 * text_normalized + 0.4 * similarity + 0.2 * proximity
+        else
+          text_normalized + similarity
+        end
+
+      build_search_row(hit, source, combined, near)
     end)
     |> Enum.sort_by(fn m -> -m.combined_score end)
   end
 
-  defp build_search_row(hit, source, combined) do
+  defp proximity_score(nil), do: 0.0
+  defp proximity_score(distance) when is_integer(distance), do: 1.0 / (1 + distance)
+
+  defp build_search_row(hit, source, combined, near) do
     row = hit.row
 
-    %{
+    base = %{
       entity: {row["e.namespace"], row["e.name"]},
       namespace: row["e.namespace"],
       name: row["e.name"],
@@ -585,6 +609,65 @@ defmodule Cqr.Adapter.Grafeo do
       similarity: hit.similarity,
       combined_score: combined
     }
+
+    if near do
+      Map.put(base, :near_distance, hit.bfs_distance)
+    else
+      base
+    end
+  end
+
+  # BFS from the `near` anchor through typed relationship edges
+  # (CORRELATES_WITH, DEPENDS_ON, CONTRIBUTES_TO, CAUSES, PART_OF) plus
+  # CONTAINS for hierarchical adjacency. Returns a map from {ns, name} to
+  # distance for every entity reachable within @max_bfs_depth hops.
+  # Entities outside that radius (or unreachable) are absent from the map.
+  #
+  # Implementation note: this issues one Cypher neighbor query per frontier
+  # node per depth level. Worst-case cost is O(branching^depth). The spec
+  # accepts this for chunk A; chunk C will benchmark and, if needed,
+  # collapse to a single variable-length-path query.
+  @max_bfs_depth 4
+  @bfs_edge_types ~w(CORRELATES_WITH DEPENDS_ON CONTRIBUTES_TO CAUSES PART_OF CONTAINS)
+
+  defp compute_distance_map(nil), do: %{}
+
+  defp compute_distance_map({anchor_ns, anchor_name}) do
+    visited = %{{anchor_ns, anchor_name} => 0}
+    bfs_traverse([{anchor_ns, anchor_name}], visited, 1)
+  end
+
+  defp bfs_traverse(_frontier, visited, depth) when depth > @max_bfs_depth, do: visited
+  defp bfs_traverse([], visited, _depth), do: visited
+
+  defp bfs_traverse(frontier, visited, depth) do
+    next_frontier =
+      frontier
+      |> Enum.flat_map(&fetch_neighbors/1)
+      |> Enum.uniq()
+      |> Enum.reject(fn key -> Map.has_key?(visited, key) end)
+
+    new_visited =
+      Enum.reduce(next_frontier, visited, fn key, acc ->
+        Map.put(acc, key, depth)
+      end)
+
+    bfs_traverse(next_frontier, new_visited, depth + 1)
+  end
+
+  defp fetch_neighbors({ns, name}) do
+    edge_list = Enum.map_join(@bfs_edge_types, ", ", fn t -> "\"#{t}\"" end)
+
+    query =
+      "MATCH (e:Entity {namespace: '#{escape(ns)}', name: '#{escape(name)}'})" <>
+        "-[r]-(neighbor:Entity) " <>
+        "WHERE type(r) IN [#{edge_list}] " <>
+        "RETURN DISTINCT neighbor.namespace AS ns, neighbor.name AS name"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} -> Enum.map(rows, fn r -> {r["ns"], r["name"]} end)
+      {:error, _} -> []
+    end
   end
 
   defp maybe_limit(results, nil), do: results
