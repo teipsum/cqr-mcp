@@ -36,7 +36,7 @@ Before you take any meaningful action, orient. Every other CQR primitive require
 
 **Phase B — DISCOVER your domain.** 2-3 `cqr_discover` queries using keywords relevant to your role. Free-text mode for exploratory queries, prefix mode (`entity:foo:*`) to enumerate a namespace, anchor mode (full address) to walk a known entity's neighborhood.
 
-**Phase C — RESOLVE key entities.** Pull the canonical content for 3-8 entities surfaced by your DISCOVER queries. RESOLVE returns the full description plus quality metadata — read it before relying on the entity.
+**Phase C — RESOLVE key entities.** Pull the canonical content for 3-8 entities surfaced by your DISCOVER queries. RESOLVE returns the full description plus quality metadata — read it before relying on the entity. When you already know the specific addresses you need at the start of a task, prefer `cqr_resolve_batch` over a sequence of `cqr_resolve` calls — it collapses the round-trip cost and returns per-entity status (`ok` or `not_found`) in a single response, preserving the same privacy contract per row.
 
 Only then act.
 

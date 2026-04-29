@@ -79,6 +79,110 @@ defmodule Cqr.Repo.Semantic do
   end
 
   @doc """
+  Batched variant of `get_entity/2`. Issues a single Cypher query that
+  fans across all requested addresses with an OR-joined WHERE clause,
+  then partitions the rows back into a per-entity result map.
+
+  Returns `{:ok, results}` where `results` is a map keyed by `{ns, name}`:
+
+      %{
+        {"ns1", "name1"} => {:ok, entity_data},
+        {"ns2", "name2"} => {:error, :not_found},
+        {"ns3", "name3"} => {:error, :not_visible}
+      }
+
+  The privacy contract is preserved per row: `:not_visible` is reported
+  to the caller (the adapter layer) which is responsible for collapsing
+  it to the same surface as `:not_found` so the wire response cannot be
+  used to infer the existence of hidden entities.
+
+  When `visible_scope_paths` is `nil` no scope filtering is applied —
+  callers opting out of governance.
+
+  An empty `entities` list short-circuits to `{:ok, %{}}`.
+  """
+  def get_entities_batch(entities, visible_scope_paths \\ nil)
+
+  def get_entities_batch([], _visible_scope_paths), do: {:ok, %{}}
+
+  def get_entities_batch(entities, visible_scope_paths) when is_list(entities) do
+    deduped = Enum.uniq(entities)
+
+    case fetch_entities_rows(deduped) do
+      {:ok, by_key} ->
+        results = build_batch_results(deduped, by_key, visible_scope_paths)
+        {:ok, results}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_entities_rows(entities) do
+    where_clause =
+      entities
+      |> Enum.map(fn {ns, name} ->
+        "(e.namespace = '#{escape_gql(ns)}' AND e.name = '#{escape_gql(name)}')"
+      end)
+      |> Enum.join(" OR ")
+
+    query =
+      "MATCH (e:Entity)-[:IN_SCOPE]->(s:Scope) WHERE " <>
+        where_clause <>
+        " RETURN e.namespace, e.name, e.type, e.description, e.owner, " <>
+        "e.reputation, e.freshness_hours_ago, e.certified, " <>
+        "e.certified_by, e.certified_at, e.certification_status, s.path"
+
+    case GrafeoServer.query(query) do
+      {:ok, rows} ->
+        grouped = Enum.group_by(rows, fn row -> {row["e.namespace"], row["e.name"]} end)
+        {:ok, grouped}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp build_batch_results(entities, by_key, visible_scope_paths) do
+    visible_keys =
+      case visible_scope_paths do
+        nil -> nil
+        paths -> Enum.map(paths, &Enum.join(&1, ":"))
+      end
+
+    Enum.into(entities, %{}, fn {ns, name} = entity ->
+      case Map.get(by_key, {ns, name}) do
+        nil ->
+          {entity, {:error, :not_found}}
+
+        rows ->
+          {entity, resolve_visibility(entity, rows, visible_scope_paths, visible_keys)}
+      end
+    end)
+  end
+
+  defp resolve_visibility(_entity, rows, nil, _visible_keys) do
+    {:ok, build_entity(rows)}
+  end
+
+  defp resolve_visibility(entity, rows, visible_scope_paths, visible_keys) do
+    case verify_containment_path(entity, visible_scope_paths) do
+      :ok ->
+        data = build_entity(rows)
+        entity_keys = Enum.map(data.scopes, &Enum.join(&1, ":"))
+
+        if Enum.any?(entity_keys, &(&1 in visible_keys)) do
+          {:ok, data}
+        else
+          {:error, :not_visible}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  @doc """
   Walk the containment path for a hierarchical entity address and verify
   the requesting agent has scope authorization at every level.
 

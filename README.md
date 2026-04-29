@@ -4,7 +4,7 @@
 
 An Elixir/OTP MCP server that gives AI agents scoped, quality-annotated, auditable access to organizational knowledge. Single process. No Docker. No external database. Connects to Claude Desktop, Cursor, or any MCP-compatible client in under ten minutes.
 
-All twelve CQR cognitive primitives ship as MCP tools today, plus a batch-assert throughput tool. Both stdio and SSE transports are live. Precompiled NIFs cover Apple Silicon and Linux (x86_64 and ARM64), so end users do not need a Rust toolchain.
+All twelve CQR cognitive primitives ship as MCP tools today, plus batch-resolve and batch-assert throughput tools. Both stdio and SSE transports are live. Precompiled NIFs cover Apple Silicon and Linux (x86_64 and ARM64), so end users do not need a Rust toolchain.
 
 ---
 
@@ -110,7 +110,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Restart Claude Desktop. Thirteen tools appear in the tool picker: `cqr_resolve`, `cqr_discover`, `cqr_assert`, `cqr_assert_batch`, `cqr_certify`, `cqr_signal`, `cqr_trace`, `cqr_refresh`, `cqr_compare`, `cqr_hypothesize`, `cqr_anchor`, `cqr_awareness`, and `cqr_update`.
+Restart Claude Desktop. Fourteen tools appear in the tool picker: `cqr_resolve`, `cqr_resolve_batch`, `cqr_discover`, `cqr_assert`, `cqr_assert_batch`, `cqr_certify`, `cqr_signal`, `cqr_trace`, `cqr_refresh`, `cqr_compare`, `cqr_hypothesize`, `cqr_anchor`, `cqr_awareness`, and `cqr_update`.
 
 ### Connect over SSE
 
@@ -145,11 +145,12 @@ DISCOVER composes graph traversal, BM25 full-text search, and HNSW vector simila
 
 ## CQR Primitives
 
-CQR defines twelve cognitive operation primitives across six categories. All twelve ship as MCP tools in this server, alongside a `cqr_assert_batch` throughput tool for high-volume writes.
+CQR defines twelve cognitive operation primitives across six categories. All twelve ship as MCP tools in this server, alongside `cqr_resolve_batch` and `cqr_assert_batch` throughput tools for high-volume reads and writes.
 
 | MCP Tool | Primitive | Category | Description |
 |----------|-----------|----------|-------------|
 | `cqr_resolve` | **RESOLVE** | Retrieval | Canonical entity retrieval with quality metadata and optional freshness/reputation constraints. Walks a scope fallback chain when the primary scope has no authoritative answer. |
+| `cqr_resolve_batch` | **RESOLVE** (batch) | Retrieval | Resolve multiple entities in one call. Per-entity status in the response; preserves the `cqr_resolve` privacy contract per row. For orient-phase context loading. |
 | `cqr_discover` | **DISCOVER** | Retrieval | Neighborhood scan composing graph traversal, BM25 full-text, and HNSW vector similarity. Direction control (`outbound`, `inbound`, `both`) and depth limits. |
 | `cqr_assert` | **ASSERT** | Governance | Agent writes uncertified context with mandatory `INTENT` and `DERIVED_FROM` fields. Creates a governance paper trail for agent-generated findings, derived metrics, and working hypotheses. |
 | `cqr_certify` | **CERTIFY** | Governance | Lifecycle for entity definitions: `proposed → under_review → certified → (contested → under_review) → superseded → proposed`. Every transition creates an audit record; `contested` and `superseded` are non-terminal and can re-enter the lifecycle. |

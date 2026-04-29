@@ -66,39 +66,42 @@ defmodule Cqr.Adapter.Grafeo do
   def resolve_batch(%Cqr.ResolveBatch{entities: entities}, scope_context, _opts) do
     visible = scope_context[:visible_scopes] || []
 
-    results =
-      Enum.map(entities, fn entity ->
-        address = Cqr.Types.format_entity(entity)
+    case Semantic.get_entities_batch(entities, visible) do
+      {:ok, by_entity} ->
+        results = Enum.map(entities, &batch_row(&1, by_entity))
+        {:ok, %Cqr.Result{data: results, sources: ["grafeo"]}}
 
-        case Semantic.get_entity(entity, visible) do
-          {:ok, entity_data} ->
-            payload = normalize_entity(entity_data, %Cqr.Resolve{entity: entity})
-            %{address: address, status: :ok, payload: payload, error: nil}
+      {:error, reason} ->
+        {:error, %Cqr.Error{code: :adapter_error, message: "Grafeo error: #{inspect(reason)}"}}
+    end
+  end
 
-          {:error, :not_found} ->
-            err = Cqr.Error.entity_not_found(address, similar: [])
-            %{address: address, status: :not_found, payload: nil, error: err}
+  defp batch_row(entity, by_entity) do
+    address = Cqr.Types.format_entity(entity)
 
-          {:error, :not_visible} ->
-            # Privacy contract: ancestor-blocked addresses look like not_found,
-            # never scope_access. The agent cannot infer the existence of hidden entities.
-            err = Cqr.Error.entity_not_found(address, similar: [])
-            %{address: address, status: :not_found, payload: nil, error: err}
+    case Map.fetch!(by_entity, entity) do
+      {:ok, entity_data} ->
+        payload = normalize_entity(entity_data, %Cqr.Resolve{entity: entity})
+        %{address: address, status: :ok, payload: payload, error: nil}
 
-          {:error, reason} ->
-            err = %Cqr.Error{
-              code: :adapter_error,
-              message: "Grafeo error for #{address}: #{inspect(reason)}"
-            }
+      {:error, :not_found} ->
+        err = Cqr.Error.entity_not_found(address, similar: [])
+        %{address: address, status: :not_found, payload: nil, error: err}
 
-            %{address: address, status: :error, payload: nil, error: err}
-        end
-      end)
+      {:error, :not_visible} ->
+        # Privacy contract: ancestor-blocked addresses look like not_found,
+        # never scope_access. The agent cannot infer the existence of hidden entities.
+        err = Cqr.Error.entity_not_found(address, similar: [])
+        %{address: address, status: :not_found, payload: nil, error: err}
 
-    # Per-row results live in `data`. Quality envelope is empty at the batch level
-    # because each row carries its own per-entity payload (which itself contains
-    # per-entity quality metadata via normalize_entity).
-    {:ok, %Cqr.Result{data: results, sources: ["grafeo"]}}
+      {:error, reason} ->
+        err = %Cqr.Error{
+          code: :adapter_error,
+          message: "Grafeo error for #{address}: #{inspect(reason)}"
+        }
+
+        %{address: address, status: :error, payload: nil, error: err}
+    end
   end
 
   @impl true
