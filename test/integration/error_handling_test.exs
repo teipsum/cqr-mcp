@@ -114,13 +114,25 @@ defmodule Cqr.Integration.ErrorHandlingTest do
       end)
     end
 
-    test "free-text search with no matches returns an empty result envelope" do
+    test "free-text search with no text matches returns a well-formed envelope" do
+      # bge-small produces non-zero cosine similarity for any input, so a
+      # nonsense token may still surface weak vector hits. The contract
+      # tested here is that the engine returns a well-formed result envelope
+      # (a Cqr.Result with a list of data) rather than crashing or hanging
+      # on an unmatchable query — not that the result list is empty.
       assert_completes_within(@budget_ms, fn ->
-        assert {:ok, %Cqr.Result{data: []}} =
+        assert {:ok, %Cqr.Result{data: data}} =
                  Engine.execute(
                    ~s(DISCOVER concepts RELATED TO "xyzznonexistenttoken123"),
                    @product_context
                  )
+
+        assert is_list(data)
+
+        Enum.each(data, fn r ->
+          combined = String.downcase("#{r.name} #{r.description || ""}")
+          refute String.contains?(combined, "xyzznonexistenttoken123")
+        end)
       end)
     end
   end

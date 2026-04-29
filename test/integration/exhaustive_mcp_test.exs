@@ -592,15 +592,25 @@ defmodule Cqr.Integration.ExhaustiveMcpTest do
       end)
     end
 
-    test "C08 finance scope: 'revenue' query returns finance entities only" do
+    test "C08 finance scope: 'revenue' query returns entities in visible scopes only" do
+      # Originally asserted r.namespace == "finance". That conflated
+      # namespace with scope: a finance agent's visible set is
+      # [["company"], ["company", "finance"]], so a company-scoped entity
+      # in any namespace is legitimately returned. With pseudo-embeddings
+      # the cross-scope leakage was masked by hash sparsity; with real
+      # embeddings any company-scoped entity may surface. The actual
+      # scope contract is that every result lives in a scope path the
+      # agent can see.
+      visible = [["company"], ["company", "finance"]]
+
       assert {:ok, %Cqr.Result{data: data}} =
                Engine.execute(~s(DISCOVER concepts RELATED TO "revenue"), @finance_context)
 
       assert [_ | _] = data
 
       Enum.each(data, fn r ->
-        assert r.namespace == "finance",
-               "expected finance namespace, got #{inspect(r.namespace)}"
+        assert Enum.any?(r.scopes, &(&1 in visible)),
+               "expected entity in visible scopes #{inspect(visible)}, got #{inspect(r.scopes)}"
       end)
     end
 
@@ -1080,12 +1090,16 @@ defmodule Cqr.Integration.ExhaustiveMcpTest do
       end)
     end
 
-    test "H08 free-text 'revenue' from finance scope returns finance results only" do
+    test "H08 free-text 'revenue' from finance scope returns entities in visible scopes only" do
+      # See C08 for the full rationale. Scope visibility, not namespace
+      # equality, is the actual contract.
+      visible = [["company"], ["company", "finance"]]
+
       assert {:ok, %Cqr.Result{data: data}} =
                Engine.execute(~s(DISCOVER concepts RELATED TO "revenue"), @finance_context)
 
       assert [_ | _] = data
-      assert Enum.all?(data, fn r -> r.namespace == "finance" end)
+      assert Enum.all?(data, fn r -> Enum.any?(r.scopes, &(&1 in visible)) end)
     end
 
     test "H09 free-text 'revenue' from root scope returns multi-scope results" do

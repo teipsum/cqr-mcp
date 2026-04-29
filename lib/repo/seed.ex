@@ -86,7 +86,7 @@ defmodule Cqr.Repo.Seed do
 
   defp seed_bootstrap_entity(db) do
     desc = "Root bootstrap entity for the CQR knowledge graph"
-    embedding_literal = format_embedding(pseudo_embedding("bootstrap #{desc}"))
+    embedding_literal = format_embedding(Cqr.Embedding.embed("bootstrap #{desc}"))
 
     q!(
       db,
@@ -134,55 +134,6 @@ defmodule Cqr.Repo.Seed do
 
   # --- Entities ---
 
-  # Embedding dimension. Fixed at seed time and reused for query-time
-  # pseudo-embeddings in the Grafeo adapter. Kept public (via the module
-  # attribute reflected through embedding_dims/0) so the adapter can call
-  # Cqr.Repo.Seed.embedding_dims/0 without hardcoding the value.
-  @embedding_dims 384
-
-  @doc "Returns the dimensionality of seeded pseudo-embeddings."
-  def embedding_dims, do: @embedding_dims
-
-  @doc """
-  Deterministic bag-of-words pseudo-embedding.
-
-  Tokenizes `text` (lowercased, punctuation stripped), hashes each word to
-  a dimension index in `0..#{@embedding_dims - 1}`, increments that dimension,
-  and L2-normalizes the resulting vector.
-
-  This is *not* a trained embedding — there's no semantic learning. But
-  because overlapping vocabulary produces overlapping non-zero dimensions,
-  cosine similarity between two pseudo-embeddings reflects word-level
-  overlap between the source texts. That's enough signal to validate the
-  BM25 + vector + graph pipeline end-to-end without introducing an
-  embedding model dependency.
-  """
-  def pseudo_embedding(text) when is_binary(text) do
-    empty = List.duplicate(0.0, @embedding_dims)
-
-    vec =
-      text
-      |> String.downcase()
-      |> String.replace(~r/[^a-z0-9 ]/, " ")
-      |> String.split(~r/\s+/, trim: true)
-      |> Enum.reduce(empty, fn word, acc ->
-        idx = :erlang.phash2(word, @embedding_dims)
-        List.update_at(acc, idx, fn v -> v + 1.0 end)
-      end)
-
-    normalize(vec)
-  end
-
-  defp normalize(vec) do
-    mag = :math.sqrt(Enum.reduce(vec, 0.0, fn x, acc -> acc + x * x end))
-
-    if mag == 0.0 do
-      vec
-    else
-      Enum.map(vec, fn x -> x / mag end)
-    end
-  end
-
   @doc """
   Format an embedding vector as a Cypher list literal for INSERT statements.
   Exposed so the Grafeo adapter can write the same format on ASSERT as the
@@ -200,7 +151,7 @@ defmodule Cqr.Repo.Seed do
 
   defp seed_entities(db) do
     for {ns, name, type, desc, scope_name, owner, reputation, freshness_h} <- entities() do
-      embedding = pseudo_embedding("#{name} #{desc}")
+      embedding = Cqr.Embedding.embed("#{name} #{desc}")
       embedding_literal = format_embedding(embedding)
 
       q!(

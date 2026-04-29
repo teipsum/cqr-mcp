@@ -178,9 +178,11 @@ defmodule Cqr.Integration.DiscoverMultiParadigmTest do
 
       # Company root sees `customer_success:expansion_revenue` which is
       # invisible to the finance agent. Proving the scope filter runs
-      # BEFORE the search, not as a post-filter.
-      assert length(company_result.data) > length(finance_result.data)
-
+      # BEFORE the search, not as a post-filter. The original length
+      # comparison broke once real embeddings started returning weak
+      # similarity for many entities — both contexts now hit the
+      # @vector_top_k cap. The presence/absence assertions below are
+      # the actual scope contract, so the length check was redundant.
       assert Enum.any?(
                company_result.data,
                &(&1.entity == {"customer_success", "expansion_revenue"})

@@ -349,7 +349,7 @@ defmodule Cqr.Adapter.Grafeo do
         {:ok, empty_search_result()}
 
       {:ok, candidates} ->
-        query_embedding = Seed.pseudo_embedding(term)
+        query_embedding = Cqr.Embedding.embed(term)
         ranked = rank_candidates(candidates, term, query_embedding)
         limited = maybe_limit(ranked, expression.limit)
         {:ok, build_search_result(limited)}
@@ -766,12 +766,13 @@ defmodule Cqr.Adapter.Grafeo do
     reputation = 0.5
     now = DateTime.utc_now() |> DateTime.to_iso8601()
 
-    # Pseudo-embedding over name + description matches the seeder's format,
-    # so the free-text DISCOVER vector path surfaces asserted entities the
-    # same way it surfaces seeded ones.
+    # Real semantic embedding over name + description (bge-small-en-v1.5
+    # via Bumblebee) matches the seeder's format, so the free-text DISCOVER
+    # vector path surfaces asserted entities the same way it surfaces seeded
+    # ones.
     embedding_literal =
       "#{name} #{expression.description}"
-      |> Seed.pseudo_embedding()
+      |> Cqr.Embedding.embed()
       |> Seed.format_embedding()
 
     query =

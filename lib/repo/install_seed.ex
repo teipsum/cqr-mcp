@@ -169,7 +169,7 @@ defmodule Cqr.Repo.InstallSeed do
   defp seed_entities(db) do
     for entity <- @entities do
       {namespace, name} = parse_entity_address(entity.entity)
-      embedding = Seed.pseudo_embedding("#{name} #{entity.description}")
+      embedding = Cqr.Embedding.embed("#{name} #{entity.description}")
       embedding_literal = Seed.format_embedding(embedding)
 
       # Initial reputation higher than user-asserted entities (0.5)
