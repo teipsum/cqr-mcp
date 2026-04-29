@@ -243,6 +243,40 @@ defmodule Cqr.Parser.DiscoverTest do
       assert result.depth == nil
       assert result.annotate == nil
       assert result.limit == nil
+      assert result.near == nil
+    end
+  end
+
+  describe "DISCOVER — NEAR clause" do
+    test "free-text search with NEAR anchor" do
+      {:ok, result} =
+        Parser.parse(
+          ~s(DISCOVER concepts RELATED TO "patent strategy" NEAR entity:engineering:proposals:resolve_batch)
+        )
+
+      assert result.related_to == {:search, "patent strategy"}
+      assert result.near == {"engineering:proposals", "resolve_batch"}
+    end
+
+    test "NEAR with two-segment anchor" do
+      {:ok, result} =
+        Parser.parse(
+          "DISCOVER concepts RELATED TO entity:product:churn_rate NEAR entity:product:retention_rate"
+        )
+
+      assert result.near == {"product", "retention_rate"}
+    end
+
+    test "NEAR composes with other clauses in any order" do
+      {:ok, result} =
+        Parser.parse(
+          ~s(DISCOVER concepts RELATED TO "rate" NEAR entity:product:churn_rate WITHIN scope:product LIMIT 5)
+        )
+
+      assert result.related_to == {:search, "rate"}
+      assert result.near == {"product", "churn_rate"}
+      assert result.within == [["product"]]
+      assert result.limit == 5
     end
   end
 end

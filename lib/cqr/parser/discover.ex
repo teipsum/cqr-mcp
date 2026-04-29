@@ -2,7 +2,7 @@ defmodule Cqr.Parser.Discover do
   @moduledoc """
   DISCOVER-specific parser combinators.
 
-  Parses: `DISCOVER concepts RELATED TO entity/string [WITHIN ...] [DEPTH n] [ANNOTATE ...] [LIMIT n]`
+  Parses: `DISCOVER concepts RELATED TO entity/string [WITHIN ...] [DEPTH n] [ANNOTATE ...] [LIMIT n] [DIRECTION ...] [NEAR entity:ns:name]`
 
   Optional clauses may appear in any order.
   """
@@ -83,13 +83,22 @@ defmodule Cqr.Parser.Discover do
     |> label("DIRECTION clause (outbound, inbound, both)")
   end
 
+  def near_clause do
+    ignore(string("NEAR"))
+    |> ignore(Terminals.sp())
+    |> concat(Terminals.entity())
+    |> unwrap_and_tag(:near)
+    |> label("NEAR clause (entity:namespace:name anchor for hybrid graph+vector ranking)")
+  end
+
   def optional_clause do
     choice([
       within_clause(),
       depth_clause(),
       annotate_clause(),
       limit_clause(),
-      direction_clause()
+      direction_clause(),
+      near_clause()
     ])
   end
 
@@ -118,6 +127,7 @@ defmodule Cqr.Parser.Discover do
       {:annotate, annots}, acc -> %{acc | annotate: annots}
       {:limit, l}, acc -> %{acc | limit: l}
       {:direction, dir}, acc -> %{acc | direction: dir}
+      {:near, anchor}, acc -> %{acc | near: anchor}
     end)
   end
 end

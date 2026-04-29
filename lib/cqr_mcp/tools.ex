@@ -287,6 +287,18 @@ defmodule CqrMcp.Tools do
               "Maximum number of results to return. Applies to all three " <>
                 "DISCOVER modes (anchor, prefix, free-text). Default 10.",
             "default" => 10
+          },
+          "near" => %{
+            "type" => "string",
+            "description" =>
+              "Optional entity address (e.g., entity:engineering:proposals:resolve_batch). " <>
+                "When provided in free-text search mode, results are biased toward " <>
+                "entities both semantically related to the topic AND structurally " <>
+                "adjacent to this anchor in the relationship graph (BFS distance " <>
+                "through CORRELATES_WITH, DEPENDS_ON, CONTRIBUTES_TO, CAUSES, " <>
+                "PART_OF, and CONTAINS edges, capped at depth 4). Result rows " <>
+                "gain a near_distance field. Has no effect in anchor mode or " <>
+                "prefix mode."
           }
         },
         "required" => ["topic"]
@@ -1005,8 +1017,40 @@ defmodule CqrMcp.Tools do
         _ -> parts
       end
 
+    parts =
+      case normalize_near(args["near"]) do
+        nil -> parts
+        addr -> parts ++ ["NEAR #{addr}"]
+      end
+
     Enum.join(parts, " ")
   end
+
+  # Normalize a user-supplied near argument to the `entity:ns:name` form the
+  # parser expects. Accepts either form (with or without the `entity:` prefix)
+  # and returns nil for malformed input. Near is purely a ranking hint, so
+  # silent degradation is preferred over rejecting the whole tool call.
+  defp normalize_near(nil), do: nil
+  defp normalize_near(""), do: nil
+
+  defp normalize_near(addr) when is_binary(addr) do
+    normalized =
+      if String.starts_with?(addr, "entity:"), do: addr, else: "entity:" <> addr
+
+    rest = String.replace_prefix(normalized, "entity:", "")
+    segments = String.split(rest, ":")
+
+    if length(segments) >= 2 and Enum.all?(segments, &valid_near_segment?/1) do
+      normalized
+    else
+      nil
+    end
+  end
+
+  defp normalize_near(_), do: nil
+
+  defp valid_near_segment?(seg),
+    do: seg != "" and Regex.match?(~r/^[a-z_][a-z0-9_]*$/, seg)
 
   defp build_assert_expression(args) do
     with {:ok, entity} <- require_string(args, "entity"),
