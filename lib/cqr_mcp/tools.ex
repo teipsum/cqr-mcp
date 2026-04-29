@@ -2,10 +2,10 @@ defmodule CqrMcp.Tools do
   @moduledoc """
   MCP tool definitions for the CQR planner.
 
-  Provides the tools surfaced to MCP clients: cqr_resolve, cqr_discover,
-  cqr_certify, cqr_assert, cqr_assert_batch, cqr_trace, cqr_signal,
-  cqr_refresh, cqr_awareness, cqr_hypothesize, cqr_compare, cqr_anchor,
-  and cqr_update.
+  Provides the tools surfaced to MCP clients: cqr_resolve, cqr_resolve_batch,
+  cqr_discover, cqr_certify, cqr_assert, cqr_assert_batch, cqr_trace,
+  cqr_signal, cqr_refresh, cqr_awareness, cqr_hypothesize, cqr_compare,
+  cqr_anchor, and cqr_update.
 
   Each tool definition includes name, description, and JSON Schema for inputs.
   Tool execution delegates to `Cqr.Engine.execute/2`.
@@ -15,6 +15,7 @@ defmodule CqrMcp.Tools do
   def list do
     [
       resolve_tool(),
+      resolve_batch_tool(),
       discover_tool(),
       certify_tool(),
       assert_tool(),
@@ -34,6 +35,22 @@ defmodule CqrMcp.Tools do
   def call("cqr_resolve", args, context) do
     expression = build_resolve_expression(args)
     execute_and_format(expression, context)
+  end
+
+  def call("cqr_resolve_batch", %{"entities" => entities} = args, context)
+      when is_list(entities) do
+    case build_resolve_batch_expression(args) do
+      {:ok, expression} -> execute_and_format(expression, context)
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  def call("cqr_resolve_batch", _args, _context) do
+    {:error,
+     %{
+       "code" => -32_602,
+       "message" => "Missing or invalid required field: entities (must be an array)"
+     }}
   end
 
   def call("cqr_discover", args, context) do
@@ -163,6 +180,54 @@ defmodule CqrMcp.Tools do
           }
         },
         "required" => ["entity"]
+      }
+    }
+  end
+
+  defp resolve_batch_tool do
+    %{
+      "name" => "cqr_resolve_batch",
+      "description" =>
+        "Resolve many entities in a single MCP call. Accepts an array of hierarchical " <>
+          "entity addresses (recommended ceiling 50) and returns one row per entity " <>
+          "with the same payload shape as cqr_resolve plus a per-row status field. " <>
+          "Designed for the orient phase of an agent's cold start, where 5-50 entities " <>
+          "must be pulled at once: this collapses N MCP round-trips into 1, removing " <>
+          "the per-call serialization, scope-narrowing, and adapter dispatch overhead. " <>
+          "Privacy contract: an entity that is blocked by ancestor scope returns " <>
+          "status:not_found, byte-identical to a row for an entity that does not " <>
+          "exist. The agent cannot use this tool to probe for the existence of " <>
+          "entities outside its visible scopes.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "entities" => %{
+            "type" => "array",
+            "description" =>
+              "Array of hierarchical entity addresses to resolve. Each entry uses the " <>
+                "same form accepted by cqr_resolve (entity:namespace:name, with " <>
+                "namespace optionally containing additional segments). Empty array " <>
+                "is allowed and returns an empty result list. Recommended ceiling 50.",
+            "items" => %{"type" => "string"}
+          },
+          "scope" => %{
+            "type" => "string",
+            "description" =>
+              "Optional scope constraint applied to every entity in the batch. Same " <>
+                "format as cqr_resolve: scope:seg1:seg2 (e.g., scope:company:finance)."
+          },
+          "freshness" => %{
+            "type" => "string",
+            "description" =>
+              "Optional maximum age requirement applied to every entity (e.g., 24h, 7d, 30m)."
+          },
+          "reputation" => %{
+            "type" => "number",
+            "description" =>
+              "Optional minimum reputation threshold (0.0 to 1.0) applied to every entity."
+          }
+        },
+        "required" => ["entities"]
       }
     }
   end
@@ -776,6 +841,127 @@ defmodule CqrMcp.Tools do
     Enum.join(parts, " ")
   end
 
+  defp build_resolve_batch_expression(args) do
+    with {:ok, entity_refs} <- parse_resolve_batch_entities(args["entities"]),
+         {:ok, scope} <- parse_optional_scope(args["scope"]),
+         {:ok, freshness} <- parse_optional_freshness(args["freshness"]),
+         {:ok, reputation} <- parse_optional_reputation(args["reputation"]) do
+      {:ok,
+       %Cqr.ResolveBatch{
+         entities: entity_refs,
+         scope: scope,
+         freshness: freshness,
+         reputation: reputation
+       }}
+    end
+  end
+
+  defp parse_resolve_batch_entities(entities) when is_list(entities) do
+    Enum.reduce_while(entities, {:ok, []}, fn raw, {:ok, acc} ->
+      case parse_resolve_batch_address(raw) do
+        {:ok, ref} -> {:cont, {:ok, [ref | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp parse_resolve_batch_address(raw) when is_binary(raw) do
+    stripped =
+      case raw do
+        "entity:" <> rest -> rest
+        other -> other
+      end
+
+    case String.split(stripped, ":") do
+      segments when length(segments) >= 2 ->
+        {ns_segments, [name]} = Enum.split(segments, -1)
+        ns = Enum.join(ns_segments, ":")
+
+        if ns == "" or name == "" do
+          {:error,
+           %{
+             "code" => -32_602,
+             "message" => "Invalid entity address: #{inspect(raw)}"
+           }}
+        else
+          {:ok, {ns, name}}
+        end
+
+      _ ->
+        {:error,
+         %{
+           "code" => -32_602,
+           "message" => "Invalid entity address: #{inspect(raw)}"
+         }}
+    end
+  end
+
+  defp parse_resolve_batch_address(raw) do
+    {:error,
+     %{
+       "code" => -32_602,
+       "message" => "Invalid entity address: #{inspect(raw)}"
+     }}
+  end
+
+  defp parse_optional_scope(nil), do: {:ok, nil}
+
+  defp parse_optional_scope(raw) when is_binary(raw) do
+    segments =
+      case raw do
+        "scope:" <> rest -> String.split(rest, ":")
+        other -> String.split(other, ":")
+      end
+
+    case Enum.reject(segments, &(&1 == "")) do
+      [] ->
+        {:error, %{"code" => -32_602, "message" => "Invalid scope: #{inspect(raw)}"}}
+
+      cleaned ->
+        {:ok, cleaned}
+    end
+  end
+
+  defp parse_optional_scope(other),
+    do: {:error, %{"code" => -32_602, "message" => "Invalid scope: #{inspect(other)}"}}
+
+  defp parse_optional_freshness(nil), do: {:ok, nil}
+
+  defp parse_optional_freshness(raw) when is_binary(raw) do
+    case Regex.run(~r/^(\d+)([smhd])$/, raw) do
+      [_, n_str, unit_str] ->
+        unit =
+          case unit_str do
+            "s" -> :s
+            "m" -> :m
+            "h" -> :h
+            "d" -> :d
+          end
+
+        {:ok, {String.to_integer(n_str), unit}}
+
+      _ ->
+        {:error,
+         %{
+           "code" => -32_602,
+           "message" => "Invalid freshness: #{inspect(raw)} (expected forms like 24h, 7d, 30m)"
+         }}
+    end
+  end
+
+  defp parse_optional_freshness(other),
+    do: {:error, %{"code" => -32_602, "message" => "Invalid freshness: #{inspect(other)}"}}
+
+  defp parse_optional_reputation(nil), do: {:ok, nil}
+  defp parse_optional_reputation(value) when is_number(value), do: {:ok, value / 1}
+
+  defp parse_optional_reputation(other),
+    do: {:error, %{"code" => -32_602, "message" => "Invalid reputation: #{inspect(other)}"}}
+
   defp build_discover_expression(args) do
     topic = args["topic"]
 
@@ -1345,6 +1531,9 @@ defmodule CqrMcp.Tools do
 
   defp format_value(:unknown), do: nil
   defp format_value(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  # Nested Cqr.Result (e.g. per-row payload of cqr_resolve_batch). Recursively
+  # flatten through format_result so the outer envelope is wire-encodable.
+  defp format_value(%Cqr.Result{} = r), do: format_result(r)
   defp format_value({a, b}) when is_binary(a) and is_binary(b), do: "#{a}:#{b}"
   defp format_value(list) when is_list(list), do: Enum.map(list, &format_value/1)
   # Recursively normalize nested maps (e.g. conflicts.conflicting_values carry
