@@ -39,6 +39,9 @@ defmodule Cqr.Adapter.Behaviour do
   @callback resolve(expression :: term(), scope_context :: term(), opts :: keyword()) ::
               {:ok, term()} | {:error, term()}
 
+  @callback resolve_batch(expression :: term(), scope_context :: term(), opts :: keyword()) ::
+              {:ok, term()} | {:error, term()}
+
   @callback discover(expression :: term(), scope_context :: term(), opts :: keyword()) ::
               {:ok, term()} | {:error, term()}
 
@@ -78,6 +81,7 @@ defmodule Cqr.Adapter.Behaviour do
   @callback namespace_prefix() :: nil | String.t() | [String.t()]
 
   @optional_callbacks [
+    resolve_batch: 3,
     assert: 3,
     trace: 3,
     signal: 3,

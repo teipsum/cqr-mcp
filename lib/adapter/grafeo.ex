@@ -62,6 +62,42 @@ defmodule Cqr.Adapter.Grafeo do
   end
 
   @impl true
+  def resolve_batch(%Cqr.ResolveBatch{entities: entities}, scope_context, _opts) do
+    visible = scope_context[:visible_scopes] || []
+
+    results =
+      Enum.map(entities, fn entity ->
+        address = Cqr.Types.format_entity(entity)
+
+        case Semantic.get_entity(entity, visible) do
+          {:ok, entity_data} ->
+            payload = normalize_entity(entity_data, %Cqr.Resolve{entity: entity})
+            %{address: address, status: :ok, payload: payload, error: nil}
+
+          {:error, :not_found} ->
+            err = Cqr.Error.entity_not_found(address, similar: [])
+            %{address: address, status: :not_found, payload: nil, error: err}
+
+          {:error, :not_visible} ->
+            # Privacy contract: ancestor-blocked addresses look like not_found,
+            # never scope_access. The agent cannot infer the existence of hidden entities.
+            err = Cqr.Error.entity_not_found(address, similar: [])
+            %{address: address, status: :not_found, payload: nil, error: err}
+
+          {:error, reason} ->
+            err = %Cqr.Error{
+              code: :adapter_error,
+              message: "Grafeo error for #{address}: #{inspect(reason)}"
+            }
+
+            %{address: address, status: :error, payload: nil, error: err}
+        end
+      end)
+
+    {:ok, results}
+  end
+
+  @impl true
   def discover(%Cqr.Discover{related_to: related_to} = expression, scope_context, _opts) do
     visible = scope_context[:visible_scopes] || []
     depth = expression.depth || 2

@@ -41,6 +41,109 @@ defmodule Cqr.Integration.AdapterTest do
     end
   end
 
+  describe "resolve_batch/3" do
+    test "resolves multiple entities in one call, all visible" do
+      expression = %Cqr.ResolveBatch{
+        entities: [
+          {"finance", "arr"},
+          {"product", "churn_rate"}
+        ]
+      }
+
+      scope = %{visible_scopes: [["company", "finance"], ["company", "product"], ["company"]]}
+      {:ok, results} = GrafeoAdapter.resolve_batch(expression, scope, [])
+
+      assert length(results) == 2
+      assert Enum.all?(results, &(&1.status == :ok))
+
+      assert Enum.map(results, & &1.address) == [
+               "entity:finance:arr",
+               "entity:product:churn_rate"
+             ]
+
+      assert hd(results).payload.__struct__ == Cqr.Result
+    end
+
+    test "empty entity list returns empty result list" do
+      expression = %Cqr.ResolveBatch{entities: []}
+      scope = %{visible_scopes: [["company"]]}
+      {:ok, results} = GrafeoAdapter.resolve_batch(expression, scope, [])
+      assert results == []
+    end
+
+    test "missing entity surfaces :not_found per-row, others still resolve" do
+      expression = %Cqr.ResolveBatch{
+        entities: [
+          {"finance", "arr"},
+          {"finance", "nonexistent_xyz"}
+        ]
+      }
+
+      {:ok, results} = GrafeoAdapter.resolve_batch(expression, @finance_scope, [])
+
+      assert length(results) == 2
+      [first, second] = results
+      assert first.status == :ok
+      assert first.address == "entity:finance:arr"
+      assert second.status == :not_found
+      assert second.address == "entity:finance:nonexistent_xyz"
+      assert second.error.code == :entity_not_found
+    end
+
+    test "scope-blocked entity surfaces :not_found, never :scope_access (privacy contract)" do
+      # finance:arr is invisible to an engineering-only agent.
+      # The contract is that this is indistinguishable from nonexistent entities;
+      # the agent must not be able to detect the existence of hidden entities.
+      expression = %Cqr.ResolveBatch{
+        entities: [
+          {"finance", "arr"},
+          {"finance", "truly_nonexistent_yzx"}
+        ]
+      }
+
+      {:ok, results} = GrafeoAdapter.resolve_batch(expression, @engineering_scope, [])
+
+      assert length(results) == 2
+      assert Enum.all?(results, &(&1.status == :not_found))
+      # Both responses are byte-identical in shape — the agent cannot tell which one exists.
+      assert Enum.all?(results, &(&1.error.code == :entity_not_found))
+    end
+
+    test "large batch (10 entities) round-trips correctly" do
+      # Real workload sized: an orient phase fetching its bootstrap + governance + 7 anchors.
+      entities =
+        for i <- 1..10 do
+          # Mix existing seed entities with non-existing ones to verify per-row independence.
+          if rem(i, 2) == 0 do
+            {"finance", "arr"}
+          else
+            {"finance", "missing_#{i}"}
+          end
+        end
+
+      expression = %Cqr.ResolveBatch{entities: entities}
+      {:ok, results} = GrafeoAdapter.resolve_batch(expression, @finance_scope, [])
+
+      assert length(results) == 10
+      okays = Enum.count(results, &(&1.status == :ok))
+      misses = Enum.count(results, &(&1.status == :not_found))
+      assert okays == 5
+      assert misses == 5
+    end
+
+    test "per-entity payload matches what resolve/3 returns for the same address" do
+      single_expr = %Cqr.Resolve{entity: {"finance", "arr"}}
+      {:ok, single_result} = GrafeoAdapter.resolve(single_expr, @finance_scope, [])
+
+      batch_expr = %Cqr.ResolveBatch{entities: [{"finance", "arr"}]}
+      {:ok, [batch_row]} = GrafeoAdapter.resolve_batch(batch_expr, @finance_scope, [])
+
+      # The payload from a 1-element batch should be equivalent to a single resolve.
+      assert batch_row.payload.data == single_result.data
+      assert batch_row.payload.quality == single_result.quality
+    end
+  end
+
   describe "discover/3" do
     test "discovers related entities" do
       expression = %Cqr.Discover{
