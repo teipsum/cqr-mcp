@@ -8,6 +8,11 @@ config :logger, :default_handler, config: [type: :standard_error]
 
 config :cqr_mcp, certification_preservation_policy: :standard
 
+# Cqr.Repo.Snapshot writes a JSON safety-net dump to ~/.cqr every
+# `snapshot_interval_ms`. This is the recovery point if the Grafeo
+# on-disk file corrupts (GRAFEO-X001). Disabled in :test by default.
+config :cqr_mcp, snapshot_interval_ms: 300_000
+
 # Use EXLA as the default Nx backend so Bumblebee tensors and the
 # Cqr.Embedding serving run on the local accelerator instead of pure-Erlang
 # binary tensors. EXLA picks up the Metal client automatically on Apple

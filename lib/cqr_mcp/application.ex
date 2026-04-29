@@ -48,7 +48,8 @@ defmodule CqrMcp.Application do
     # latency would otherwise spike to 10-30s on cold cache.
     [
       Cqr.Embedding,
-      {Cqr.Grafeo.Server, storage: storage, seed: seed, reset: reset}
+      {Cqr.Grafeo.Server, storage: storage, seed: seed, reset: reset},
+      Cqr.Repo.Snapshot
       | library_children()
     ]
   end

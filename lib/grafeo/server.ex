@@ -123,7 +123,7 @@ defmodule Cqr.Grafeo.Server do
 
     prepare_storage(storage, reset)
 
-    case open_database(storage) do
+    case classify_open_result(open_database(storage), storage) do
       {:ok, db} ->
         Logger.info("Grafeo embedded database started (#{storage_label(storage)})")
 
@@ -148,9 +148,58 @@ defmodule Cqr.Grafeo.Server do
         schedule_checkpoint(state)
         {:ok, state}
 
+      {:stop, :grafeo_corrupt} ->
+        {:stop, :grafeo_corrupt}
+
       {:error, reason} ->
         {:stop, {:grafeo_open_failed, reason}}
     end
+  end
+
+  @doc false
+  # Inspect the result of `open_database/1` and decide whether the open
+  # succeeded, hit the GRAFEO-X001 snapshot-checksum corruption (the bug
+  # this module's safety net wraps), or failed for some other reason.
+  # Exposed for unit-testing the recovery banner without needing a real
+  # corrupt file.
+  def classify_open_result({:ok, _db} = ok, _storage), do: ok
+
+  def classify_open_result({:error, reason}, storage) do
+    if grafeo_corrupt_error?(reason) do
+      log_corruption_banner(storage, reason)
+      {:stop, :grafeo_corrupt}
+    else
+      {:error, reason}
+    end
+  end
+
+  defp grafeo_corrupt_error?(reason) when is_binary(reason) do
+    String.contains?(reason, "GRAFEO-X001") or
+      String.contains?(reason, "snapshot checksum mismatch")
+  end
+
+  defp grafeo_corrupt_error?(reason) do
+    grafeo_corrupt_error?(inspect(reason))
+  end
+
+  defp log_corruption_banner(storage, reason) do
+    path =
+      case storage do
+        {:path, p} -> p
+        :memory -> "<in-memory>"
+      end
+
+    Logger.error("""
+    ====================================================================
+    GRAFEO DATABASE CORRUPT
+    File: #{path}
+    Error: #{inspect(reason)}
+    Recovery:
+      1. ~/bin/cqr-recover
+      2. ~/bin/cqr --persist
+    See: https://github.com/teipsum/cqr-mcp/issues/323
+    ====================================================================
+    """)
   end
 
   @impl true

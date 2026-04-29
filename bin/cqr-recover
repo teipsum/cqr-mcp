@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# cqr-recover — restore ~/.cqr/grafeo.grafeo from the JSON safety-net
+# snapshot written by Cqr.Repo.Snapshot.
+#
+# When to run this:
+#   You started cqr and it crashed at boot with a multi-line
+#   "GRAFEO DATABASE CORRUPT" banner naming GRAFEO-X001 / "snapshot
+#   checksum mismatch". That's the Grafeo 0.5.40/0.5.41 graceful-shutdown
+#   bug (snapshot_length=0 written against a stale checksum). The on-disk
+#   .grafeo file is unreadable; the JSON snapshot is intact.
+#
+# What this does:
+#   1. Verifies a usable snapshot exists at ~/.cqr/grafeo.snapshot.json
+#   2. Verifies the 0.5.40 grafeo CLI binary is reachable
+#   3. Moves any existing ~/.cqr/grafeo.grafeo aside with a timestamp
+#      suffix (so the corrupt bytes are preserved for forensics)
+#   4. Initialises a fresh LPG database at ~/.cqr/grafeo.grafeo
+#   5. Loads the snapshot via `grafeo data load`
+#   6. Prints node and edge counts
+#
+# What this does NOT do:
+#   - Start cqr. The operator runs ~/bin/cqr (or `mix run --no-halt`)
+#     after this exits.
+#   - Auto-recover at cqr boot. cqr fails fast on corruption by design.
+#
+# Exit codes:
+#   0  recovery completed
+#   1  pre-condition failed (no snapshot, no CLI, init/load failed)
+
+set -euo pipefail
+
+SNAPSHOT="${HOME}/.cqr/grafeo.snapshot.json"
+DB="${HOME}/.cqr/grafeo.grafeo"
+GRAFEO_CLI="${GRAFEO_CLI:-/tmp/grafeo-cli-sandbox/grafeo-v0.5.40-aarch64-apple-darwin/grafeo}"
+
+if [[ ! -f "$SNAPSHOT" ]]; then
+  echo "cqr-recover: snapshot not found at $SNAPSHOT" >&2
+  echo "  cqr writes this every 5 minutes once Cqr.Repo.Snapshot is in the supervision tree." >&2
+  echo "  If cqr never came up under the safety net there is no snapshot to recover from." >&2
+  exit 1
+fi
+
+snapshot_size=$(wc -c < "$SNAPSHOT" | tr -d ' ')
+if [[ "$snapshot_size" -lt 1024 ]]; then
+  echo "cqr-recover: snapshot at $SNAPSHOT is suspiciously small (${snapshot_size} bytes)" >&2
+  echo "  Refusing to load. Inspect manually and rerun if it really is the right file." >&2
+  exit 1
+fi
+
+if [[ ! -x "$GRAFEO_CLI" ]]; then
+  echo "cqr-recover: grafeo CLI not executable at $GRAFEO_CLI" >&2
+  echo "  Set GRAFEO_CLI=<path> if you have it elsewhere." >&2
+  exit 1
+fi
+
+if [[ -e "$DB" ]]; then
+  ts=$(date +%Y%m%d-%H%M%S)
+  archived="${DB}.CORRUPT-${ts}"
+  echo "cqr-recover: archiving existing $DB to $archived"
+  mv "$DB" "$archived"
+fi
+
+echo "cqr-recover: initialising fresh LPG database at $DB"
+"$GRAFEO_CLI" init "$DB" --mode lpg
+
+echo "cqr-recover: loading $SNAPSHOT into $DB"
+"$GRAFEO_CLI" data load "$SNAPSHOT" "$DB"
+
+echo "cqr-recover: done. Verify with:"
+echo "  $GRAFEO_CLI info $DB"
+echo "Then start cqr:"
+echo "  ~/bin/cqr --persist"
