@@ -76,7 +76,9 @@ defmodule Mix.Tasks.Cqr.GenInstallFixture do
         Map.put(meta, :description, String.trim(body))
 
       _ ->
-        Mix.raise("#{path}: missing or malformed frontmatter (expected --- delimited block at top)")
+        Mix.raise(
+          "#{path}: missing or malformed frontmatter (expected --- delimited block at top)"
+        )
     end
   end
 
@@ -157,7 +159,7 @@ defmodule Mix.Tasks.Cqr.GenInstallFixture do
 
       require Logger
 
-      @entities #{entities_literal == "" && "[]" || ""}#{if entities_literal == "", do: "", else: "[\n" <> entities_literal <> "\n  ]"}
+      @entities #{(entities_literal == "" && "[]") || ""}#{if entities_literal == "", do: "", else: "[\n" <> entities_literal <> "\n  ]"}
 
       @doc \"\"\"
       Returns the list of entities embedded by this seeder.
